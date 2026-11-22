@@ -25,16 +25,18 @@ jobs:
         id: release
         shell: bash
         run: |
-          version="$(node -p 'require("./package.json").version')"
-          stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          if ! [[ "$version" =~ $stable ]]; then
-            echo "Expected a stable MAJOR.MINOR.PATCH version in package.json." >&2
-            exit 1
-          fi
-          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
-            echo "The release tag must equal v followed by the package.json version." >&2
-            exit 1
-          fi
+          node <<'NODE'
+          const { version } = require("./package.json");
+          const stable = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+          if (typeof version !== "string" || !stable.test(version)) {
+            console.error("Expected a stable MAJOR.MINOR.PATCH version in package.json.");
+            process.exit(1);
+          }
+          if ("v" + version !== process.env.GITHUB_REF_NAME) {
+            console.error("The release tag must equal v followed by the package.json version.");
+            process.exit(1);
+          }
+          NODE
           if ! main_sha="$(git show-ref --verify --hash refs/remotes/origin/main)"; then
             echo "Cannot verify the release without origin/main." >&2
             exit 1
@@ -45,7 +47,7 @@ jobs:
             exit 1
           fi
           epoch="$(git show -s --format=%ct "$tag_commit")"
-          echo "vsix=panda-$version.vsix" >> "$GITHUB_OUTPUT"
+          echo "vsix=panda-${GITHUB_REF_NAME#v}.vsix" >> "$GITHUB_OUTPUT"
           echo "epoch=$epoch" >> "$GITHUB_OUTPUT"
 
       - run: npm ci
