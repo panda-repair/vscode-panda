@@ -77,7 +77,7 @@ async function main() {
     mkdirSync(join(workspace, ".vscode"));
     writeFileSync(join(workspace, ".vscode", "settings.json"), JSON.stringify({ "panda.baseUrl": "http://127.0.0.1:1/v1" }));
     async function runHost(suite, settings) {
-      const profile = join(root, suite === "proxy-407" ? "p" : "u");
+      const profile = join(root, { "proxy-407": "p", full: "u", "proxy-pac": "s" }[suite]);
       mkdirSync(join(profile, "User"), { recursive: true });
       writeFileSync(join(profile, "User", "settings.json"), JSON.stringify({
         "panda.baseUrl": endpoint, "telemetry.telemetryLevel": "off", "update.mode": "none",
@@ -87,7 +87,7 @@ async function main() {
       await runTests({ vscodeExecutablePath: executable, extensionDevelopmentPath: extension,
         extensionTestsPath: join(extension, "host.cjs"), extensionTestsEnv: { PANDA_FIXTURE_ENDPOINT: endpoint,
           PANDA_FIXTURE_CASE: suite, PANDA_FIXTURE_SYNC: sync, PANDA_EXPECTED_VERSION: process.env.VSCODE_TEST_EXECUTABLE ? process.env.VSCODE_TEST_VERSION || "" : version,
-          PANDA_PROXY_FIXTURE: JSON.stringify({ endpoint: network.endpoint, bypass: network.bypass, httpProxy: network.httpProxy,
+          PANDA_PROXY_FIXTURE: JSON.stringify({ endpoint: network.endpoint, direct: network.direct, bypass: network.bypass, httpProxy: network.httpProxy,
             httpsProxy: network.httpsProxy, requiredAuth: network.requiredAuth, office: network.office, untrusted: network.untrusted }),
           NODE_EXTRA_CA_CERTS: network.ca, NODE_TLS_REJECT_UNAUTHORIZED: "1", HTTP_PROXY: "", HTTPS_PROXY: "", NO_PROXY: "",
           http_proxy: "", https_proxy: "", no_proxy: "" },
@@ -99,8 +99,9 @@ async function main() {
       });
     }
     // This user-data directory has never had an explicit proxy or a previous tunnel.
-    await runHost("proxy-407", { "panda.baseUrl": network.endpoint, "http.proxySupport": "override",
-      "http.proxyStrictSSL": false, "http.proxyAuthorization": network.requiredAuth });
+    const pacSettings = { "panda.baseUrl": network.endpoint, "http.proxySupport": "override",
+      "http.proxyStrictSSL": false, "http.proxyAuthorization": network.requiredAuth };
+    await runHost("proxy-407", pacSettings);
     const refused = network.tunnels.filter(req => req.requireAuth && !req.accepted);
     assert.ok(network.pacReads.length > 0);
     assert.ok(network.tunnels.some(req => req.kind === "https" && req.requireAuth && req.accepted));
@@ -112,6 +113,8 @@ async function main() {
       " (" + refused.length + " refused CONNECT, zero origin chat POSTs).");
     if (process.argv.includes("--proxy-407")) return;
     await runHost("full", {});
+    // VS Code can still resolve through a previous fixed proxy just after http.proxy is cleared.
+    await runHost("proxy-pac", pacSettings);
     assert.ok(gets >= 6);
     assert.deepEqual(issues, []);
     const proof = probes.verify();
@@ -123,6 +126,8 @@ async function main() {
     assert.deepEqual(networkPosts.map(req => JSON.parse(req.body).messages[0].content),
       ["fixed proxy", "HTTPS proxy only", "environment proxy", "HTTPS PAC proxy", "HTTP PAC proxy", "PAC DIRECT", "bypass proxy"]);
     assert.deepEqual(networkPosts.map(req => req.via), ["http", "https", "http", "https", "http", "direct", "direct"]);
+    assert.deepEqual(networkPosts.map(req => req.authenticatedProxy), [false, false, false, true, true, false, false]);
+    assert.deepEqual(networkPosts.slice(-2).map(req => req.host), [new URL(network.direct).host, new URL(network.bypass).host]);
     assert.ok(network.pacReads.length > 0 && network.pacReads.every(req => !req.originAuth && !req.proxyAuth));
     assert.ok(network.rejected.has("panda-unmatched.invalid:443"));
     for (const kind of ["http", "https"]) {

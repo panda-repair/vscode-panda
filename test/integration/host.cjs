@@ -2,7 +2,7 @@ const vscode = require("vscode");
 const { createHash } = require("node:crypto");
 const assert = require("node:assert/strict");
 
-async function select(expected) {
+async function select(expected, message) {
   const deadline = Date.now() + 10_000;
   let result;
   do {
@@ -10,7 +10,7 @@ async function select(expected) {
     if (JSON.stringify(result.map(row => row.id).sort()) === JSON.stringify(expected)) return result;
     await new Promise(resolve => setTimeout(resolve, 75));
   } while (Date.now() < deadline);
-  assert.deepEqual(result.map(row => row.id).sort(), expected);
+  assert.deepEqual(result.map(row => row.id).sort(), expected, message);
 }
 
 exports.run = async () => {
@@ -22,6 +22,9 @@ exports.run = async () => {
   const { secrets, provider, observer } = await vscode.extensions.getExtension("panda-repair.panda").activate();
   if (process.env.PANDA_FIXTURE_CASE === "proxy-407") {
     return require("./proxy-host.cjs").verifyPac407(secrets, select);
+  }
+  if (process.env.PANDA_FIXTURE_CASE === "proxy-pac") {
+    return require("./proxy-host.cjs").verifyPac(secrets, select, provider);
   }
   const endpoint = process.env.PANDA_FIXTURE_ENDPOINT;
   assert.match(endpoint, /^http:\/\/127\.0\.0\.1:\d+\/v1$/);
@@ -74,5 +77,5 @@ exports.run = async () => {
   await select(["auto"]);
   await secrets.delete(slot);
   await select([]);
-  await require("./proxy-host.cjs").verifyProxy(secrets, select, provider);
+  await require("./proxy-host.cjs").verifyFixedProxy(secrets, select);
 };

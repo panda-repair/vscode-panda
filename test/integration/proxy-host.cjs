@@ -11,63 +11,87 @@ async function ask(model, text) {
   } finally { clearTimeout(timer); cancel.dispose(); }
 }
 
-exports.verifyPac407 = async function verifyPac407(secrets, select) {
-  const { endpoint, requiredAuth } = JSON.parse(process.env.PANDA_PROXY_FIXTURE);
-  const http = vscode.workspace.getConfiguration("http");
-  assert.equal(http.inspect("proxy").globalValue, undefined);
-  assert.equal(http.get("proxySupport"), "override");
-  assert.equal(http.get("proxyAuthorization"), requiredAuth);
+async function expectAnswer(model, text) {
+  await assert.doesNotReject(async () => assert.equal(await ask(model, text), "tunnel answer"), text);
+}
+
+const http = () => vscode.workspace.getConfiguration("http");
+const set = (name, value) => http().update(name, value, vscode.ConfigurationTarget.Global);
+
+async function setEndpoint(secrets, endpoint) {
+  await vscode.workspace.getConfiguration("panda").update("baseUrl", endpoint, vscode.ConfigurationTarget.Global);
   const slot = "panda.apiKey." + createHash("sha256").update(endpoint).digest("hex");
   await secrets.store(slot, "pnd_it_proxy_fixture");
-  const [model] = await select(["auto:cost"]);
-  await http.update("proxyAuthorization", "Bearer wrong-fixture-407", vscode.ConfigurationTarget.Global);
+}
+
+async function selectAt(secrets, select, endpoint) {
+  await setEndpoint(secrets, endpoint);
+  return (await select(["auto:cost"], "Catalog at " + endpoint))[0];
+}
+
+exports.verifyPac407 = async function verifyPac407(secrets, select) {
+  const { endpoint, requiredAuth } = JSON.parse(process.env.PANDA_PROXY_FIXTURE);
+  assert.equal(http().inspect("proxy").globalValue, undefined);
+  assert.equal(http().get("proxySupport"), "override");
+  assert.equal(http().get("proxyAuthorization"), requiredAuth);
+  const model = await selectAt(secrets, select, endpoint);
+  await set("proxyAuthorization", "Bearer wrong-fixture-407");
   await assert.rejects(ask(model, "PAC rejects the proxy credential"), {
     message: "The network proxy requires authentication. Check the proxy address and credentials.",
   });
 };
 
-exports.verifyProxy = async function verifyProxy(secrets, select, provider) {
+exports.verifyFixedProxy = async function verifyFixedProxy(secrets, select) {
   const fixture = JSON.parse(process.env.PANDA_PROXY_FIXTURE);
-  const global = vscode.ConfigurationTarget.Global;
-  const http = vscode.workspace.getConfiguration("http");
-  const set = (name, value) => http.update(name, value, global);
-  const setEndpoint = async endpoint => {
-    await vscode.workspace.getConfiguration("panda").update("baseUrl", endpoint, global);
-    const slot = "panda.apiKey." + createHash("sha256").update(endpoint).digest("hex");
-    await secrets.store(slot, "pnd_it_proxy_fixture");
-  };
-  const selectAt = async endpoint => {
-    await setEndpoint(endpoint);
-    return (await select(["auto:cost"]))[0];
-  };
   await set("proxySupport", "override");
   await set("proxy", fixture.httpProxy);
-  const model = await selectAt(fixture.endpoint);
-  assert.equal(await ask(model, "fixed proxy"), "tunnel answer");
+  const model = await selectAt(secrets, select, fixture.endpoint);
+  await expectAnswer(model, "fixed proxy");
   await set("proxy", fixture.httpsProxy); await set("proxyStrictSSL", true);
   await assert.rejects(ask(model, "strict untrusted HTTPS proxy"), /connection/);
   await set("proxyStrictSSL", false);
-  assert.equal(await ask(model, "HTTPS proxy only"), "tunnel answer");
+  await expectAnswer(model, "HTTPS proxy only");
   await set("proxy", undefined); await set("proxyStrictSSL", true);
   process.env.HTTPS_PROXY = fixture.httpProxy;
-  assert.equal(await ask(model, "environment proxy"), "tunnel answer");
+  await expectAnswer(model, "environment proxy");
   delete process.env.HTTPS_PROXY;
-  await set("proxyStrictSSL", false);
-  await set("proxyAuthorization", fixture.requiredAuth);
-  assert.equal(await ask(model, "HTTPS PAC proxy"), "tunnel answer");
+};
+
+exports.verifyPac = async function verifyPac(secrets, select, provider) {
+  const fixture = JSON.parse(process.env.PANDA_PROXY_FIXTURE);
+  assert.equal(http().inspect("proxy").globalValue, undefined);
+  assert.equal(http().get("proxySupport"), "override");
+  assert.equal(http().get("proxyAuthorization"), fixture.requiredAuth);
+  const model = await selectAt(secrets, select, fixture.endpoint);
+  await expectAnswer(model, "HTTPS PAC proxy");
   await set("proxyStrictSSL", true);
   await assert.rejects(ask(model, "PAC rejects the untrusted proxy CA"), /connection/);
-  const office = await selectAt(fixture.office);
-  assert.equal(await ask(office, "HTTP PAC proxy"), "tunnel answer");
+  const office = await selectAt(secrets, select, fixture.office);
+  await expectAnswer(office, "HTTP PAC proxy");
   await set("proxyStrictSSL", false);
   assert.equal(process.env.NODE_TLS_REJECT_UNAUTHORIZED, "1");
-  await setEndpoint(fixture.untrusted);
+  await setEndpoint(secrets, fixture.untrusted);
   const cancel = new vscode.CancellationTokenSource();
   try {
     await assert.rejects(provider.provideLanguageModelChatInformation({ silent: true }, cancel.token), /connection/);
   } finally { cancel.dispose(); }
-  const direct = await selectAt(fixture.bypass);
-  assert.equal(await ask(direct, "PAC DIRECT"), "tunnel answer");
+  // Only the test origin's DNS address is supplied here. VS Code still chooses its PAC route.
+  const dns = require("node:dns");
+  const lookup = dns.lookup;
+  let directLookups = 0;
+  dns.lookup = function (host, options, callback) {
+    if (host === "panda-direct.invalid") {
+      directLookups++;
+      const family = typeof options === "object" ? options?.family : options;
+      host = family === 6 || family === "IPv6" ? "::ffff:127.0.0.1" : "127.0.0.1";
+    }
+    return lookup.call(this, host, options, callback);
+  };
+  try {
+    const direct = await selectAt(secrets, select, fixture.direct);
+    await expectAnswer(direct, "PAC DIRECT");
+    assert.ok(directLookups > 0);
+  } finally { dns.lookup = lookup; }
   const offHostStatus = await new Promise((resolve, reject) => {
     // A mistaken DIRECT route must fail locally before DNS or an origin connection.
     const req = require("https").get("https://panda-unmatched.invalid/", {
@@ -76,6 +100,7 @@ exports.verifyProxy = async function verifyProxy(secrets, select, provider) {
     req.on("error", reject);
   });
   assert.equal(offHostStatus, 403);
-  process.env.HTTPS_PROXY = fixture.httpProxy; process.env.NO_PROXY = "localhost.";
-  assert.equal(await ask(direct, "bypass proxy"), "tunnel answer");
+  process.env.HTTPS_PROXY = fixture.httpProxy; process.env.NO_PROXY = new URL(fixture.bypass).hostname;
+  const bypass = await selectAt(secrets, select, fixture.bypass);
+  await expectAnswer(bypass, "bypass proxy");
 };

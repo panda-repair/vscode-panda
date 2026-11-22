@@ -57,7 +57,10 @@ test("a real HTTP or HTTPS CONNECT tunnel keeps the bearer at the TLS origin, ho
   assert.equal(fixture.tunnels.length, 2);
   assert.equal((await probe({}, fixture.endpoint, { HTTPS_PROXY: fixture.httpProxy })).text, "tunnel answer");
   assert.equal(fixture.tunnels.length, 4);
-  assert.equal((await probe({}, fixture.bypass, { HTTPS_PROXY: fixture.httpProxy, NO_PROXY: "localhost." })).text, "tunnel answer");
+  const direct = new URL(fixture.bypass);
+  assert.equal(proxyRoute(direct, {}, {}).kind, "host");
+  assert.equal(proxyRoute(direct, {}, { HTTPS_PROXY: fixture.httpProxy }).kind, "proxy");
+  assert.equal((await probe({}, fixture.bypass, { HTTPS_PROXY: fixture.httpProxy, NO_PROXY: direct.hostname })).text, "tunnel answer");
   assert.equal(fixture.tunnels.length, 4);
   assert.match((await probe({ proxy: fixture.httpsProxy })).error, /connection/);
   assert.equal(fixture.tunnels.length, 4);
