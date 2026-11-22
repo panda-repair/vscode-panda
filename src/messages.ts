@@ -3,47 +3,76 @@ import { createHmac } from "node:crypto";
 import { OUTPUT_LIMIT } from "./catalog";
 import { PandaError } from "./errors";
 
-type Host = Pick<typeof vscode, "LanguageModelTextPart" | "LanguageModelToolCallPart" | "LanguageModelToolResultPart" |
+type Host = Pick<typeof vscode, "LanguageModelTextPart" | "LanguageModelDataPart" | "LanguageModelToolCallPart" | "LanguageModelToolResultPart" |
   "LanguageModelChatMessageRole" | "LanguageModelChatToolMode">;
 type ChatMessage = vscode.LanguageModelChatRequestMessage;
 type WireMessage = { role: "system" | "user" | "assistant" | "tool"; content: string | null; name?: string;
   tool_call_id?: string; tool_calls?: { id: string; type: "function"; function: { name: string; arguments: string } }[] };
 
+const ephemeral = Buffer.from("ephemeral");
+const utf8 = new TextDecoder("utf-8", { fatal: true });
+
+function cacheMarker(part: unknown, host: Host) {
+  return part instanceof host.LanguageModelDataPart && part.mimeType === "cache_control" &&
+    part.data.byteLength === ephemeral.length && ephemeral.equals(part.data);
+}
+
 function textOf(part: unknown, host: Host): string {
   if (part instanceof host.LanguageModelTextPart) return part.value;
+  if (part instanceof host.LanguageModelDataPart &&
+      /^text\/(plain|markdown)(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(part.mimeType)) {
+    try { return utf8.decode(part.data); } catch { throw new PandaError("A text content part contains invalid UTF-8."); }
+  }
   throw new PandaError("Panda accepts text and function tools. This message contains an unsupported content type.");
 }
 
 export function mapMessages(messages: readonly ChatMessage[], host: Host): WireMessage[] {
   const wire: WireMessage[] = [];
+  const pending = new Set<string>();
+  let notes: WireMessage[] = [];
+  function append(message: WireMessage) {
+    if (message.role === "user" && pending.size) { notes.push(message); return; }
+    if (message.role === "assistant" || message.role === "system") {
+      wire.push(...notes); notes = []; pending.clear();
+      for (const call of message.tool_calls ?? []) pending.add(call.id);
+    }
+    wire.push(message);
+    if (message.role === "tool") {
+      pending.delete(message.tool_call_id!);
+      if (!pending.size) { wire.push(...notes); notes = []; }
+    }
+  }
   for (const message of messages) {
     const name = message.name ? { name: message.name } : {};
+    const content = message.content.filter(part => !cacheMarker(part, host));
+    if (message.content.length && !content.length) continue;
     // The stock agent supplies System instructions to stable providers. Its role
     // name is available on the incoming enum even when callers can only create User and Assistant.
     if (host.LanguageModelChatMessageRole[message.role] === "System") {
-      wire.push({ role: "system", ...name, content: message.content.map(part => textOf(part, host)).join("") });
+      append({ role: "system", ...name, content: content.map(part => textOf(part, host)).join("") });
     } else if (message.role === host.LanguageModelChatMessageRole.Assistant) {
       const calls: NonNullable<WireMessage["tool_calls"]> = [];
       const text: string[] = [];
-      for (const part of message.content) {
+      for (const part of content) {
         if (part instanceof host.LanguageModelToolCallPart) {
           calls.push({ id: part.callId, type: "function", function: { name: part.name, arguments: canonicalJSON(part.input) } });
         } else text.push(textOf(part, host));
       }
-      wire.push({ role: "assistant", ...name, content: text.length ? text.join("") : calls.length ? null : "",
+      append({ role: "assistant", ...name, content: text.length ? text.join("") : calls.length ? null : "",
         ...(calls.length ? { tool_calls: calls } : {}) });
     } else if (message.role === host.LanguageModelChatMessageRole.User) {
       let text: string[] = [];
-      for (const part of message.content) {
+      for (const part of content) {
         if (part instanceof host.LanguageModelToolResultPart) {
-          if (text.length) { wire.push({ role: "user", ...name, content: text.join("") }); text = []; }
-          wire.push({ role: "tool", tool_call_id: part.callId, content: part.content.map(item => textOf(item, host)).join("") });
+          if (text.length) { append({ role: "user", ...name, content: text.join("") }); text = []; }
+          append({ role: "tool", tool_call_id: part.callId, content: part.content
+            .filter(item => !cacheMarker(item, host)).map(item => textOf(item, host)).join("") });
         } else text.push(textOf(part, host));
       }
-      if (text.length || !message.content.length) wire.push({ role: "user", ...name, content: text.join("") });
+      if (text.length || !content.length) append({ role: "user", ...name, content: text.join("") });
     } else throw new PandaError("The conversation contains an unsupported chat role.");
   }
-  return wire;
+  return wire.concat(notes);
 }
 
 export function chatBody(id: string, messages: readonly ChatMessage[], options: vscode.ProvideLanguageModelChatResponseOptions, host: Host) {
@@ -71,8 +100,10 @@ export function canonicalJSON(value: unknown): string {
 }
 
 // Identical wire requests share a key across host retries. No conversation content or token is sent in the key.
-export function idempotencyKey(endpoint: string, token: string, body: string): string {
-  return "panda-vscode-" + createHmac("sha256", token).update(endpoint).update("\0").update(body).digest("hex");
+export function idempotencyKey(endpoint: string, token: string, body: string, afterRun?: string): string {
+  const mac = createHmac("sha256", token).update(endpoint).update("\0").update(body);
+  if (afterRun) mac.update("\0generate-after\0").update(afterRun);
+  return "panda-vscode-" + mac.digest("hex");
 }
 
 export function tokenEstimate(input: string | ChatMessage, host: Host): number {

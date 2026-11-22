@@ -4,7 +4,7 @@ Use Panda in VS Code Chat with your own Panda inference token. **Choose Panda Au
 
 ## Install and connect
 
-1. In VS Code 1.122.0 or later, run **Extensions: Install from VSIX…** and select `panda-0.1.0.vsix`. From a terminal, use `code --install-extension panda-0.1.0.vsix`.
+1. In VS Code 1.127.0 or later, run **Extensions: Install from VSIX…** and select `panda-0.1.0.vsix`. From a terminal, use `code --install-extension panda-0.1.0.vsix`.
 2. Run **Panda: Manage API Key** from the Command Palette and paste your `pnd_it_…` inference token into the password field. The extension checks the token with Panda and saves it in VS Code’s SecretStorage.
 3. Open Chat’s model picker and select **Panda Auto · Cost**. Only Panda selectors returned by your token’s model list are available. For Business or Enterprise accounts, your administrator controls access through the **Bring Your Own Language Model Key in VS Code** policy.
 
@@ -26,7 +26,9 @@ All five accept text and function tools. Each reserves up to 16,384 output token
 
 A Panel may wait for several members before sending its HTTP headers. Every selector allows ten minutes for headers and ten minutes between response chunks. Cancel in Chat to stop waiting. After submission, cancellation or a lost connection can leave a charge even when VS Code does not receive the answer.
 
-The extension sends each chat request once. VS Code’s chat runtime can retry before it receives the first output. The same endpoint, token and wire request produce the same `Idempotency-Key`, derived from the model, messages, tool declarations, tool choice and output limit. A changed tool result or later conversation turn gets a new key. An intentional repeat of an identical request always produces the same key. Panda can deduplicate it while it retains the original record. A replay can identify an earlier run without recovering its answer.
+The extension sends each chat request once. VS Code’s chat runtime can retry before it receives the first output. The same endpoint, token and wire request produce the same `Idempotency-Key`, derived from the model, messages, tool declarations, tool choice and output limit. A changed tool result or later conversation turn gets a new key. Retry or Regenerate with an identical request reuses its key. If Panda already accepted it, Panda returns HTTP 409. VS Code shows an error with no saved or fresh answer. The retry adds no charge. Changing the prompt starts a separate request that may incur a charge. To request another generation for that run, select **Generate another answer (may incur a charge)** in its replay notification and read the answer or proposed tool calls in a separate Panda panel.
+
+Choosing the same run’s action again uses the same generation key, including after reconnecting. The panel displays tool calls as text. Closing it stops the local request. The notification keeps its request in memory for up to five minutes. Retry the original turn to reopen an expired offer.
 
 ## Endpoint
 
@@ -44,6 +46,8 @@ Panda's privacy policy says it retains billing metadata and does not retain API 
 
 ## Development
 
-Use Node.js 24 and run `npm ci`, `npm test` and `npm run test:integration`. The integration runner loads the extension into stock VS Code 1.122.0 with an isolated profile, a synthetic key and a loopback API. It downloads VS Code on first use. Set `VSCODE_TEST_EXECUTABLE` to an existing executable to run offline, or `VSCODE_TEST_CACHE` to choose a download cache. On headless Linux use `xvfb-run -a npm run test:integration`. Build the installable VSIX with `npm run package`.
+Use Node.js 24 and run `npm ci`, `npm test` and `npm run test:integration`. The integration runner uses a fresh profile, synthetic keys and a loopback API. It downloads stock VS Code 1.127.0 by default. Set `VSCODE_TEST_VERSION=stable` to test the current stable release, `VSCODE_TEST_EXECUTABLE` to an existing executable for offline use, or `VSCODE_TEST_CACHE` to choose a download cache. On headless Linux use `xvfb-run -a npm run test:integration`.
+
+Build a reproducible VSIX from a clean commit with `TZ=UTC SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" npm run package`. `panda-repair` is the placeholder publisher for this local VSIX. Confirm the Marketplace publisher ID before publishing.
 
 MIT License. Copyright (c) 2026 panda-repair.

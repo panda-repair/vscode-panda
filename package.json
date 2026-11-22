@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "publisher": "panda-repair",
   "license": "MIT",
-  "engines": { "vscode": "^1.122.0" },
+  "engines": { "vscode": "^1.127.0" },
   "categories": ["AI", "Chat"],
   "main": "./dist/extension.js",
   "contributes": {

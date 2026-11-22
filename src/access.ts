@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import type * as vscode from "vscode";
-import type { PandaClient } from "./client";
+import type { FreshOperation, PandaClient } from "./client";
 import { models } from "./catalog";
-import { PandaError } from "./errors";
+import { PandaError, PandaReplay } from "./errors";
+import { canonicalJSON, idempotencyKey } from "./messages";
 import type { OutputPart } from "./stream";
 
 export const DEFAULT_ENDPOINT = "https://app.panda.repair/v1";
@@ -101,13 +102,22 @@ export class Access {
 
   clear(identity: Identity, signal: AbortSignal) { return this.write(identity, undefined, signal); }
 
-  async chat(id: string, body: object, signal: AbortSignal, report: (part: OutputPart) => void) {
+  async chat(id: string, body: object | string, signal: AbortSignal, report: (part: OutputPart) => void,
+    onReplay?: (error: PandaReplay, wire: string, operation: FreshOperation) => void, operation?: FreshOperation) {
     if (!models.some(model => model.id === id)) throw new PandaError("This Panda model is unavailable.", "model");
     const identity = await this.identity(signal);
     if (!validKey(identity.key)) throw new PandaError("Set your Panda API key using Panda: Manage API Key.", "auth");
+    const wire = typeof body === "string" ? body : canonicalJSON(body);
+    const base = () => idempotencyKey(identity.endpoint, identity.key!, wire);
+    if (operation && operation.originalKey !== base()) throw changed();
     const grants = await this.list(identity, signal, true);
     if (!grants.some(row => row.id === id)) throw new PandaError("This Panda key has no grant for the selected model.", "auth");
     this.check(identity, signal);
-    await this.client.chat(identity.endpoint, identity.key, body, AbortSignal.any([signal, identity.epoch]), report);
+    try {
+      await this.client.chat(identity.endpoint, identity.key, wire, AbortSignal.any([signal, identity.epoch]), report, operation?.afterRun);
+    } catch (error) {
+      if (error instanceof PandaReplay) onReplay?.(error, wire, { originalKey: base(), afterRun: error.runId });
+      throw error;
+    }
   }
 }

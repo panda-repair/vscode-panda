@@ -6,9 +6,16 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        vscode: ["1.127.0", "stable"]
+    env:
+      VSCODE_TEST_VERSION: ${{ matrix.vscode }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -16,11 +23,11 @@ jobs:
       - run: npm test
       - name: Download stock VS Code for the host test
         run: |
-          node -e 'require("@vscode/test-electron").downloadAndUnzipVSCode("1.122.0").then(p => require("node:fs").appendFileSync(process.env.GITHUB_ENV, "VSCODE_TEST_EXECUTABLE=" + p + "\n"))'
+          node -e 'require("@vscode/test-electron").downloadAndUnzipVSCode(process.env.VSCODE_TEST_VERSION).then(p => require("node:fs").appendFileSync(process.env.GITHUB_ENV, "VSCODE_TEST_EXECUTABLE=" + p + "\n"))'
       - name: Run the extension host against loopback
         run: |
           sudo unshare --net bash -c '
             ip link set lo up
-            exec sudo -u "$1" env HOME="$2" PATH="$3" VSCODE_TEST_EXECUTABLE="$4" xvfb-run -a npm run test:integration
-          ' _ "$(id -un)" "$HOME" "$PATH" "$VSCODE_TEST_EXECUTABLE"
-      - run: npm run package
+            exec sudo -u "$1" env HOME="$2" PATH="$3" VSCODE_TEST_EXECUTABLE="$4" VSCODE_TEST_VERSION="$5" xvfb-run -a npm run test:integration
+          ' _ "$(id -un)" "$HOME" "$PATH" "$VSCODE_TEST_EXECUTABLE" "$VSCODE_TEST_VERSION"
+      - run: TZ=UTC SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" npm run package

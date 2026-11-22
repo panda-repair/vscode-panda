@@ -21,10 +21,11 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const signal = () => new AbortController().signal;
 
 class Text { constructor(value) { this.value = value; } }
+class Data { constructor(data, mimeType) { Object.assign(this, { data, mimeType }); } }
 class ToolCall { constructor(callId, name, input) { Object.assign(this, { callId, name, input }); } }
 class ToolResult { constructor(callId, content) { Object.assign(this, { callId, content }); } }
-const host = { LanguageModelTextPart: Text, LanguageModelToolCallPart: ToolCall, LanguageModelToolResultPart: ToolResult,
+const host = { LanguageModelTextPart: Text, LanguageModelDataPart: Data, LanguageModelToolCallPart: ToolCall, LanguageModelToolResultPart: ToolResult,
   LanguageModelChatMessageRole: { User: 1, Assistant: 2, 1: "User", 2: "Assistant", 3: "System" },
   LanguageModelChatToolMode: { Auto: 1, Required: 2 } };
 
-module.exports = { listen, json, frame, pause, signal, Text, ToolCall, ToolResult, host };
+module.exports = { listen, json, frame, pause, signal, Text, Data, ToolCall, ToolResult, host };

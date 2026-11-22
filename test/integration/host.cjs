@@ -14,8 +14,12 @@ async function select(expected) {
 }
 
 exports.run = async () => {
-  assert.equal(vscode.version, "1.122.0");
-  const { secrets, provider } = await vscode.extensions.getExtension("panda-repair.panda").activate();
+  const expected = process.env.PANDA_EXPECTED_VERSION;
+  if (expected && expected !== "stable") assert.equal(vscode.version, expected);
+  const [major, minor] = vscode.version.split(".").map(Number);
+  assert.ok(major > 1 || major === 1 && minor >= 127);
+  require("node:fs").writeFileSync(require("node:path").join(process.env.PANDA_FIXTURE_SYNC, "host-version"), vscode.version);
+  const { secrets, provider, observer } = await vscode.extensions.getExtension("panda-repair.panda").activate();
   const endpoint = process.env.PANDA_FIXTURE_ENDPOINT;
   assert.match(endpoint, /^http:\/\/127\.0\.0\.1:\d+\/v1$/);
   const slot = "panda.apiKey." + createHash("sha256").update(endpoint).digest("hex");
@@ -62,6 +66,7 @@ exports.run = async () => {
         return parts;
       });
   } finally { clearTimeout(timer); cancellation.dispose(); }
+  await require("./review-host.cjs").run(model, observer);
   await secrets.store(slot, "pnd_it_integration_b");
   await select(["auto"]);
   await secrets.delete(slot);

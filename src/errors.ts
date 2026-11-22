@@ -4,6 +4,14 @@ export class PandaError extends Error {
   }
 }
 
+export const GENERATE_ANOTHER = "Generate another answer (may incur a charge)";
+
+export class PandaReplay extends PandaError {
+  constructor(readonly runId: string, summary: string) {
+    super(summary + " The retry adds no charge and has no answer. To start another run, choose “" + GENERATE_ANOTHER + "”.");
+  }
+}
+
 export function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -14,7 +22,31 @@ function publicMessage(value: unknown, token: string) {
     .replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]+/g, " ").trim().slice(0, 320);
 }
 
-export function responseError(status: number, payload: unknown, key: string) {
+function replayError(payload: unknown, token: string, headerRunId?: string) {
+  const error = record(payload) && record(payload.error) ? payload.error : {};
+  if (error.code === "mixture_idempotency_conflict") {
+    return new PandaError("Panda rejected this idempotency key because it belongs to a different request body. This request did not start a new run.");
+  }
+  const status = typeof error.code === "string" ? /^mixture_already_(running|completed|partial|failed)$/.exec(error.code)?.[1] : undefined;
+  const panda = record(payload) && record(payload.panda) ? payload.panda : {};
+  if (!status || panda.replay !== true || panda.status !== status || panda.version !== "panda.chat.v1") {
+    return new PandaError("Panda reported an unverified request conflict or replay (HTTP 409). Its outcome and charge are unknown.");
+  }
+  const candidate = panda.run_id ?? headerRunId;
+  const runId = typeof candidate === "string" && /^[a-z0-9][a-z0-9._:/-]{0,255}$/i.test(candidate) &&
+    !candidate.toLowerCase().includes("pnd_it_") && !candidate.includes(token) && (!headerRunId || headerRunId === candidate)
+    ? candidate : undefined;
+  let summary = "Panda run" + (runId ? " " + runId : "") + " is " + status + " (HTTP 409).";
+  const charge = panda.charge;
+  if (status !== "running" && record(charge) && charge.schema_version === "panda.usd-amount.v1" &&
+      charge.currency === "USD" && typeof charge.minor_units === "string" && /^(0|[1-9][0-9]{0,11})$/.test(charge.minor_units)) {
+    const cents = charge.minor_units.padStart(3, "0");
+    summary += " Settled charge: USD " + cents.slice(0, -2) + "." + cents.slice(-2) + ".";
+  } else summary += status === "running" ? " Its charge has not settled." : " The settled charge is unavailable.";
+  return runId ? new PandaReplay(runId, summary) : new PandaError(summary + " The retry adds no charge and has no answer.");
+}
+
+export function responseError(status: number, payload: unknown, key: string, headerRunId?: string) {
   const error = record(payload) && record(payload.error) ? payload.error : {};
   if (status === 401) return new PandaError("The Panda API key is wrong or expired. Update it with Panda: Manage API Key.", "auth");
   if (status === 403) return new PandaError("This Panda key does not permit the requested operation.", "auth");
@@ -27,7 +59,7 @@ export function responseError(status: number, payload: unknown, key: string) {
     return new PandaError("This conversation exceeds the Panda route's context limit. Shorten it or request fewer output tokens.");
   }
   if (status >= 300 && status < 400) return new PandaError("The Panda endpoint returned a redirect. Check the API base URL.");
-  if (status === 409) return new PandaError("Panda reported a request conflict or replay. The earlier request may already have run and been charged.");
+  if (status === 409) return replayError(payload, key, headerRunId);
   if (status >= 500) return new PandaError("Panda could not complete the response. A chat request may already have run and been charged.");
   return new PandaError("Panda rejected the request (HTTP " + status + ").");
 }

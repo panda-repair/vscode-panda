@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { Access, DEFAULT_ENDPOINT, normalizeEndpoint, secretSlot, validKey } from "./access";
 import { PandaClient } from "./client";
 import { PandaError } from "./errors";
+import { GenerateActions } from "./generate";
 import { chatBody, tokenEstimate } from "./messages";
 
 function endpoint() {
@@ -32,6 +33,7 @@ async function cancellable<T>(token: vscode.CancellationToken, operation: (signa
 export function activate(context: vscode.ExtensionContext) {
   const client = new PandaClient();
   const access = new Access(context.secrets, endpoint, client);
+  const generations = new GenerateActions(access, vscode);
   const updates = new vscode.EventEmitter<void>();
   let management: Promise<boolean> | undefined;
 
@@ -81,7 +83,8 @@ export function activate(context: vscode.ExtensionContext) {
       return cancellable(token, async signal => {
         const body = chatBody(model.id, messages, options, vscode);
         await access.chat(model.id, body, signal, part => progress.report("text" in part ?
-          new vscode.LanguageModelTextPart(part.text) : new vscode.LanguageModelToolCallPart(part.id, part.name, part.input)));
+          new vscode.LanguageModelTextPart(part.text) : new vscode.LanguageModelToolCallPart(part.id, part.name, part.input)),
+          (error, wire, operation) => generations.offer(model.id, error, wire, operation));
       });
     },
     async provideTokenCount(_model, input, token) {
@@ -90,7 +93,7 @@ export function activate(context: vscode.ExtensionContext) {
     },
   };
 
-  context.subscriptions.push(updates, { dispose() { access.invalidate(); void client.close(); } },
+  context.subscriptions.push(updates, generations, { dispose() { access.invalidate(); void client.close(); } },
     vscode.commands.registerCommand("panda.manageApiKey", async () => {
       try { await manage(new AbortController().signal); }
       catch (error) { void vscode.window.showErrorMessage(publicError(error).message); }
@@ -98,11 +101,11 @@ export function activate(context: vscode.ExtensionContext) {
     context.secrets.onDidChange(event => {
       if (event.key.startsWith("panda.apiKey.")) {
         try { if (event.key !== secretSlot(normalizeEndpoint(endpoint()))) return; } catch { /* Also clear the old binding. */ }
-        access.invalidate(); updates.fire();
+        generations.clear(); access.invalidate(); updates.fire();
       }
     }),
     vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration("panda.baseUrl")) { access.invalidate(); updates.fire(); }
+      if (event.affectsConfiguration("panda.baseUrl")) { generations.clear(); access.invalidate(); updates.fire(); }
     }),
     vscode.lm.registerLanguageModelChatProvider("panda", provider));
 }

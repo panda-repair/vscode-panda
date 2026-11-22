@@ -5,18 +5,24 @@ const { join, resolve } = require("node:path");
 const http = require("node:http");
 const assert = require("node:assert/strict");
 const { frame } = require("../fixture.cjs");
+const { reviewFixture } = require("./review-fixture.cjs");
 
 async function main() {
+  const version = process.env.VSCODE_TEST_VERSION || "1.127.0";
   const executable = process.env.VSCODE_TEST_EXECUTABLE || await downloadAndUnzipVSCode({
-    version: "1.122.0", cachePath: process.env.VSCODE_TEST_CACHE || resolve(".vscode-test"),
+    version, cachePath: process.env.VSCODE_TEST_CACHE || resolve(".vscode-test"),
   });
-  const root = mkdtempSync(join(tmpdir(), "panda-"));
+  // Short profile paths also fit macOS's 103-byte Unix-domain socket limit.
+  const root = mkdtempSync(join(tmpdir(), "p"));
   const extension = join(root, "extension");
-  const profile = join(root, "user");
+  const profile = join(root, "u");
   const workspace = join(root, "workspace");
   for (const path of [join(extension, "dist"), join(profile, "User"), workspace, join(root, "extensions")]) {
     mkdirSync(path, { recursive: true });
   }
+  const sync = join(root, "sync"); mkdirSync(sync);
+  const probes = reviewFixture(sync);
+  const issues = [];
   let gets = 0, posts = 0;
   const roles = [], keys = [];
   const server = http.createServer(async (req, res) => {
@@ -33,6 +39,11 @@ async function main() {
       let text = "";
       for await (const chunk of req) text += chunk;
       const body = JSON.parse(text);
+      if (body.messages[0]?.content?.startsWith("probe:")) {
+        try { await probes.handle(req, res, body, text); }
+        catch (error) { issues.push(String(error)); res.destroy(); }
+        return;
+      }
       if (!(allowed.includes(body.model) && body.stream && body.max_tokens === 16384 && req.headers["idempotency-key"] &&
           body.tools?.[0]?.function?.name === "read_fixture")) {
         res.writeHead(400).end(); return;
@@ -60,7 +71,7 @@ async function main() {
     writeFileSync(join(extension, "package.json"), JSON.stringify({ ...manifest, main: "./test-entry.cjs" }));
     copyFileSync("dist/extension.js", join(extension, "dist", "extension.js"));
     copyFileSync(join(__dirname, "entry.cjs"), join(extension, "test-entry.cjs"));
-    copyFileSync(join(__dirname, "host.cjs"), join(extension, "host.cjs"));
+    for (const name of ["host.cjs", "review-host.cjs", "copilot.cjs"]) copyFileSync(join(__dirname, name), join(extension, name));
     writeFileSync(join(workspace, "marker.txt"), "marker from the local fixture");
     mkdirSync(join(workspace, ".vscode"));
     writeFileSync(join(workspace, ".vscode", "settings.json"), JSON.stringify({ "panda.baseUrl": "http://127.0.0.1:1/v1" }));
@@ -70,7 +81,8 @@ async function main() {
       "chat.disableAIFeatures": false, "security.workspace.trust.enabled": false,
     }));
     await runTests({ vscodeExecutablePath: executable, extensionDevelopmentPath: extension,
-      extensionTestsPath: join(extension, "host.cjs"), extensionTestsEnv: { PANDA_FIXTURE_ENDPOINT: endpoint },
+      extensionTestsPath: join(extension, "host.cjs"), extensionTestsEnv: { PANDA_FIXTURE_ENDPOINT: endpoint,
+        PANDA_FIXTURE_SYNC: sync, PANDA_EXPECTED_VERSION: process.env.VSCODE_TEST_EXECUTABLE ? process.env.VSCODE_TEST_VERSION || "" : version },
       launchArgs: [workspace, "--user-data-dir=" + profile, "--extensions-dir=" + join(root, "extensions"),
         "--disable-extensions", "--disable-gpu", "--no-sandbox", "--use-inmemory-secretstorage", "--use-mock-keychain",
         "--disable-telemetry", "--disable-updates", "--disable-workspace-trust", "--skip-welcome", "--skip-release-notes",
@@ -78,11 +90,16 @@ async function main() {
         "--proxy-server=http://127.0.0.1:1", "--proxy-bypass-list=localhost;127.0.0.1;[::1]"],
     });
     assert.ok(gets >= 6);
-    assert.equal(posts, 4);
+    assert.deepEqual(issues, []);
+    const proof = probes.verify();
+    assert.equal(posts, 4 + proof.posts);
     assert.equal(new Set(keys).size, 4);
     assert.deepEqual(roles, [["user"], ["user", "assistant", "tool"],
       ["system", "user"], ["system", "user", "assistant", "tool"]]);
-    console.log("Panda integration passed on stock VS Code 1.122.0 (" + gets + " catalog GETs, " + posts + " chat POSTs).");
+    const actualVersion = readFileSync(join(sync, "host-version"), "utf8");
+    console.log("Panda integration passed on stock VS Code " + actualVersion + " (" + gets + " catalog GETs, " + posts +
+      " chat POSTs; native cancellation closed both sockets; " + proof.replayPosts + " replay-scenario POSTs, " +
+      proof.replayAdmissions + " admissions).");
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));

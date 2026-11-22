@@ -8,6 +8,8 @@ import { streamParts, OutputPart } from "./stream";
 export const IDLE_TIMEOUT_MS = 600_000;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 
+export type FreshOperation = { originalKey: string; afterRun: string };
+
 async function boundedJSON(body: AsyncIterable<Uint8Array>): Promise<unknown> {
   const pieces: Uint8Array[] = [];
   let bytes = 0;
@@ -25,20 +27,21 @@ export class PandaClient {
 
   async close() { await this.agent.destroy(); }
 
-  private async exchange<T>(endpoint: string, path: string, key: string, body: string | undefined, signal: AbortSignal,
+  private async exchange<T>(endpoint: string, path: string, key: string, wire: { body: string; key: string } | undefined, signal: AbortSignal,
     consume: (response: Dispatcher.ResponseData) => Promise<T>): Promise<T> {
     signal.throwIfAborted();
     try {
-      const response = await request(endpoint + path, { dispatcher: this.agent, method: body === undefined ? "GET" : "POST",
+      const response = await request(endpoint + path, { dispatcher: this.agent, method: wire ? "POST" : "GET",
         headersTimeout: IDLE_TIMEOUT_MS, bodyTimeout: IDLE_TIMEOUT_MS, signal, idempotent: false,
-        headers: { authorization: "Bearer " + key, accept: body === undefined ? "application/json" : "text/event-stream",
-          ...(body !== undefined && { "content-type": "application/json", "idempotency-key": idempotencyKey(endpoint, key, body) }) },
-        body,
+        headers: { authorization: "Bearer " + key, accept: wire ? "text/event-stream" : "application/json",
+          ...(wire && { "content-type": "application/json", "idempotency-key": wire.key }) },
+        body: wire?.body,
       });
       try {
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          const payload = [400, 402, 429].includes(response.statusCode) ? await boundedJSON(response.body) : undefined;
-          throw responseError(response.statusCode, payload, key);
+          const payload = [400, 402, 409, 429].includes(response.statusCode) ? await boundedJSON(response.body) : undefined;
+          const run = response.headers["x-panda-request-id"];
+          throw responseError(response.statusCode, payload, key, typeof run === "string" ? run : undefined);
         }
         return await consume(response);
       } finally {
@@ -52,7 +55,7 @@ export class PandaClient {
       if (error instanceof PandaError) throw error;
       const timedOut = record(error) && typeof error.code === "string" && error.code.includes("TIMEOUT");
       const reason = timedOut ? "The Panda connection timed out." : "Could not complete the Panda connection.";
-      throw new PandaError(reason + (body === undefined ? " Check the endpoint and try again." : " The request may have run and been charged."));
+      throw new PandaError(reason + (wire ? " The request may have run and been charged." : " Check the endpoint and try again."));
     }
   }
 
@@ -64,8 +67,10 @@ export class PandaClient {
     });
   }
 
-  async chat(endpoint: string, key: string, body: object, signal: AbortSignal, report: (part: OutputPart) => void) {
-    return this.exchange(endpoint, "/chat/completions", key, canonicalJSON(body), signal, async response => {
+  async chat(endpoint: string, key: string, body: object | string, signal: AbortSignal, report: (part: OutputPart) => void,
+    afterRun?: string) {
+    const text = typeof body === "string" ? body : canonicalJSON(body);
+    return this.exchange(endpoint, "/chat/completions", key, { body: text, key: idempotencyKey(endpoint, key, text, afterRun) }, signal, async response => {
       const type = String(response.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
       if (type !== "text/event-stream") throw new PandaError("Panda returned an unexpected response format.");
       await streamParts(response.body, key, signal, report);
