@@ -1,0 +1,46 @@
+{
+  "name": "panda",
+  "displayName": "Panda",
+  "description": "Use Panda's Auto models and Panels in VS Code Chat.",
+  "version": "0.1.0",
+  "publisher": "panda-repair",
+  "license": "MIT",
+  "engines": { "vscode": "^1.122.0" },
+  "categories": ["AI", "Chat"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languageModelChatProviders": [
+      { "vendor": "panda", "displayName": "Panda", "managementCommand": "panda.manageApiKey" }
+    ],
+    "commands": [{ "command": "panda.manageApiKey", "title": "Panda: Manage API Key" }],
+    "configuration": {
+      "title": "Panda",
+      "properties": {
+        "panda.baseUrl": {
+          "type": "string",
+          "default": "https://app.panda.repair/v1",
+          "scope": "machine",
+          "description": "Panda API base URL, including /v1. Each endpoint uses its own saved API key."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && node scripts/build.cjs",
+    "vscode:prepublish": "npm run build",
+    "test": "tsc && node --test test/*.test.cjs",
+    "test:integration": "npm run build && node test/integration/run.cjs",
+    "package": "vsce package --no-dependencies --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.120.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.1.1",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  },
+  "dependencies": { "undici": "7.30.2" },
+  "files": ["dist/extension.js", "dist/undici-LICENSE.txt", "README.md", "LICENSE"]
+}

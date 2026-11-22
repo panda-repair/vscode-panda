@@ -1,0 +1,26 @@
+name: Check extension
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Download stock VS Code for the host test
+        run: |
+          node -e 'require("@vscode/test-electron").downloadAndUnzipVSCode("1.122.0").then(p => require("node:fs").appendFileSync(process.env.GITHUB_ENV, "VSCODE_TEST_EXECUTABLE=" + p + "\n"))'
+      - name: Run the extension host against loopback
+        run: |
+          sudo unshare --net bash -c '
+            ip link set lo up
+            exec sudo -u "$1" env HOME="$2" PATH="$3" VSCODE_TEST_EXECUTABLE="$4" xvfb-run -a npm run test:integration
+          ' _ "$(id -un)" "$HOME" "$PATH" "$VSCODE_TEST_EXECUTABLE"
+      - run: npm run package
