@@ -1,0 +1,62 @@
+name: Release to Visual Studio Marketplace
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: marketplace
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Check release tag and main
+        id: release
+        shell: bash
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if ! [[ "$version" =~ $stable ]]; then
+            echo "Expected a stable MAJOR.MINOR.PATCH version in package.json." >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "The release tag must equal v followed by the package.json version." >&2
+            exit 1
+          fi
+          if ! main_sha="$(git show-ref --verify --hash refs/remotes/origin/main)"; then
+            echo "Cannot verify the release without origin/main." >&2
+            exit 1
+          fi
+          tag_commit="$(git rev-parse --verify "${GITHUB_SHA}^{commit}")"
+          if ! git merge-base --is-ancestor "$tag_commit" "$main_sha"; then
+            echo "The tagged commit must be on main." >&2
+            exit 1
+          fi
+          epoch="$(git show -s --format=%ct "$tag_commit")"
+          echo "vsix=panda-$version.vsix" >> "$GITHUB_OUTPUT"
+          echo "epoch=$epoch" >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+      - run: npm test
+      - name: Package the tagged source
+        env:
+          TZ: UTC
+          SOURCE_DATE_EPOCH: ${{ steps.release.outputs.epoch }}
+          VSIX: ${{ steps.release.outputs.vsix }}
+        run: npm run package -- --out "$VSIX"
+      - name: Publish the packaged VSIX with OIDC
+        env:
+          VSIX: ${{ steps.release.outputs.vsix }}
+        run: ./node_modules/.bin/vsce publish --oidc --packagePath "$VSIX"
