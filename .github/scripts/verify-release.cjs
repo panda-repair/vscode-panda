@@ -9,6 +9,24 @@ function command(executable, args, failure) {
   catch { throw new Error(failure); }
 }
 
+function approvedDigest(tag, sha, submitted) {
+  // Git separates the signature without running a verifier. Keep the tag message's original lines.
+  const format = "%(objecttype)%00%(*objectname)%00%(contents)%00%(contents:signature)";
+  const record = command("git", ["tag", "--list", tag, "--format=" + format], "Could not read the release tag.");
+  const fields = record.slice(0, -1).split("\0");
+  const [type, target, contents, signature] = fields;
+  if (fields.length !== 4 || type !== "tag" || !contents.endsWith(signature)) {
+    throw new Error("Expected an annotated release tag.");
+  }
+  if (target !== sha) throw new Error("The release tag must point to the exact reviewed commit.");
+  const message = contents.slice(0, contents.length - signature.length);
+  const lines = message.split("\n").filter(line => line.trimStart().toLowerCase().startsWith("vsix-sha256"));
+  const digest = /^vsix-sha256: ([a-fA-F0-9]{64})$/.exec(lines[0])?.[1].toLowerCase();
+  if (!digest || lines.length !== 1) throw new Error("Expected one vsix-sha256: <64 hex> line in the tag message.");
+  if (digest !== submitted.toLowerCase()) throw new Error("The dispatch digest must match the protected tag's approval.");
+  return digest;
+}
+
 function checkCI(sha) {
   const url = "repos/" + repository + "/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=" + sha + "&per_page=100";
   const pages = JSON.parse(command("gh", ["api", "--paginate", "--slurp", url], "Could not read the CI runs."));
@@ -41,15 +59,14 @@ function verify() {
     throw new Error("Supply a stable vMAJOR.MINOR.PATCH tag, a full commit SHA and a VSIX SHA-256.");
   }
   const sha = REVIEWED_SHA.toLowerCase();
-  const tagCommit = command("git", ["rev-parse", "--verify", "refs/tags/" + TAG + "^{commit}"], "Release tag not found.").trim();
-  if (tagCommit !== sha) throw new Error("The release tag must point to the exact reviewed commit.");
+  const digest = approvedDigest(TAG, sha, VSIX_SHA256);
   const main = command("git", ["show-ref", "--verify", "--hash", "refs/remotes/origin/main"], "Missing origin/main.").trim();
   command("git", ["merge-base", "--is-ancestor", sha, main], "The reviewed commit must be on main.");
   const { version } = JSON.parse(command("git", ["show", sha + ":package.json"], "Missing package.json in the reviewed commit."));
   if (typeof version !== "string" || "v" + version !== TAG) throw new Error("The manifest version must exactly match the tag.");
   checkCI(sha);
   const epoch = command("git", ["show", "-s", "--format=%ct", sha], "Missing reviewed commit timestamp.").trim();
-  appendFileSync(process.env.GITHUB_OUTPUT, "sha=" + sha + "\nepoch=" + epoch + "\n");
+  appendFileSync(process.env.GITHUB_OUTPUT, "sha=" + sha + "\nepoch=" + epoch + "\napproved_digest=" + digest + "\n");
 }
 
 try { verify(); } catch (error) { console.error(error.message); process.exitCode = 1; }

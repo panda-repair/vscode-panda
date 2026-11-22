@@ -31,7 +31,7 @@
     "vscode:prepublish": "npm run build",
     "test": "tsc && node --test test/*.test.cjs",
     "test:integration": "npm run build && node test/integration/run.cjs",
-    "package": "vsce package --no-dependencies --allow-missing-repository"
+    "package": "node scripts/package.cjs"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

@@ -13,6 +13,8 @@ test("the release guard binds a stable tag, reviewed Git object and latest canon
     GIT_COMMITTER_EMAIL: "fixture@test.invalid", GITHUB_EVENT_NAME: "workflow_dispatch",
     GITHUB_REPOSITORY: "panda-repair/vscode-panda", GITHUB_REF: "refs/heads/main", GITHUB_OUTPUT: join(cwd, "output") };
   const git = (...args) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
+  const approval = "vsix-sha256: " + "A".repeat(64);
+  const tagRelease = (tag, target, text = approval) => git("tag", "-am", "Release fixture", "-m", text, tag, target);
   git("init", "-q", "-b", "main");
   function commit(version) {
     writeFileSync(join(cwd, "package.json"), JSON.stringify({ version }));
@@ -20,12 +22,12 @@ test("the release guard binds a stable tag, reviewed Git object and latest canon
     return git("rev-parse", "HEAD");
   }
   const side = commit("0.0.9");
-  git("tag", "v0.0.9", side);
+  tagRelease("v0.0.9", side);
   git("switch", "--orphan", "reviewed");
   const sha = commit("0.1.0");
-  git("tag", "-am", "Release fixture", "v0.1.0", sha);
-  const malformed = commit("0.2.0\n"); git("tag", "v0.2.0", malformed);
-  const main = commit("0.3.0"); git("tag", "v0.4.0", main);
+  tagRelease("v0.1.0", sha);
+  const malformed = commit("0.2.0\n"); tagRelease("v0.2.0", malformed);
+  const main = commit("0.3.0"); tagRelease("v0.4.0", main);
   git("update-ref", "refs/remotes/origin/main", main);
   const script = resolve(__dirname, "../.github/scripts/verify-release.cjs");
   // Only the Actions API is substituted. Execute the same guard and Git queries as the workflow.
@@ -45,6 +47,7 @@ cp.execFileSync = (file, args, options) => {
   const fixture = (runs, total = runs.length) => [{ total_count: total, workflow_runs: runs }];
   const cases = [
     ["annotated tag on main", {}, fixture([green]), true],
+    ["mixed-case input agrees with the tag", { VSIX_SHA256: "aA".repeat(32) }, fixture([green]), true],
     ["uppercase hashes and documented workflow path", { REVIEWED_SHA: sha.toUpperCase() }, fixture([{ ...green, path: green.path + "@main" }]), true],
     ["wrong repository", { GITHUB_REPOSITORY: "fixture/fork" }],
     ["wrong ref", { GITHUB_REF: "refs/tags/v0.1.0" }],
@@ -53,6 +56,7 @@ cp.execFileSync = (file, args, options) => {
     ["bad digest", { VSIX_SHA256: "a".repeat(63) }],
     ["nonstable tag", { TAG: "v01.0.0" }],
     ["missing tag", { TAG: "v5.0.0" }],
+    ["digest differs from tag", { VSIX_SHA256: "0".repeat(64) }],
     ["wrong tagged commit", { REVIEWED_SHA: main }],
     ["outside main", { TAG: "v0.0.9", REVIEWED_SHA: side }],
     ["unmodified JSON string", { TAG: "v0.2.0", REVIEWED_SHA: malformed }],
@@ -75,9 +79,22 @@ cp.execFileSync = (file, args, options) => {
       ...env, TAG: "v0.1.0", REVIEWED_SHA: sha, VSIX_SHA256: "A".repeat(64), RUN_PAGES: JSON.stringify(pages), ...override,
     } });
     assert.equal(result.status, allowed ? 0 : 1, name + ": " + result.stderr);
-    assert.equal(readFileSync(env.GITHUB_OUTPUT, "utf8"), allowed ? "sha=" + sha + "\nepoch=" + git("show", "-s", "--format=%ct", sha) + "\n" : "", name);
+    const expected = "sha=" + sha + "\nepoch=" + git("show", "-s", "--format=%ct", sha) + "\napproved_digest=" + "a".repeat(64) + "\n";
+    assert.equal(readFileSync(env.GITHUB_OUTPUT, "utf8"), allowed ? expected : "", name);
   }
   cases.forEach(check);
+  const signature = "-----BEGIN SSH SIGNATURE-----\n" + approval + "\n-----END SSH SIGNATURE-----";
+  for (const [name, text, allowed] of [
+    ["lightweight tag", null], ["missing digest line", "Release approved without a checksum"],
+    ["duplicate digest", approval + "\n" + approval], ["conflicting malformed line", approval + "\nVSIX-sha256: invalid"],
+    ["invalid tag hex", "vsix-sha256: " + "Z".repeat(64)], ["digest in signature only", signature],
+    ["valid digest in message, signature ignored", approval + "\n\n" + signature, true],
+  ]) {
+    git("tag", "-d", "v0.1.0");
+    if (text === null) git("tag", "v0.1.0", sha);
+    else tagRelease("v0.1.0", sha, text);
+    check([name, {}, fixture([green]), allowed]);
+  }
   git("update-ref", "-d", "refs/remotes/origin/main");
   check(["missing exact remote main", {}]);
 });

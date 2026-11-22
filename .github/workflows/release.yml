@@ -28,6 +28,7 @@ jobs:
     outputs:
       sha: ${{ steps.review.outputs.sha }}
       epoch: ${{ steps.review.outputs.epoch }}
+      approved_digest: ${{ steps.review.outputs.approved_digest }}
       tool_id: ${{ steps.tools.outputs.artifact-id }}
       tool_digest: ${{ steps.tools.outputs.artifact-digest }}
       attempt: ${{ github.run_attempt }}
@@ -88,11 +89,11 @@ jobs:
         env:
           TZ: UTC
           SOURCE_DATE_EPOCH: ${{ needs.verify.outputs.epoch }}
-          VSIX_SHA256: ${{ inputs.vsix_sha256 }}
+          VSIX_SHA256: ${{ needs.verify.outputs.approved_digest }}
         run: |
           file="$RUNNER_TEMP/panda-$GITHUB_RUN_ATTEMPT.vsix"
           npm run package -- --out "$file"
-          [[ -f "$file" && ! -L "$file" ]]
+          [[ -f "$file" && ! -L "$file" ]] || exit 1
           printf '%s  %s\n' "$VSIX_SHA256" "$file" | shasum -a 256 --check --strict
       - name: Save the approved VSIX as a single file
         id: package
@@ -123,7 +124,11 @@ jobs:
           for value in "$TOOL_ID" "$VSIX_ID" "$TOOL_ATTEMPT" "$BUILD_ATTEMPT"; do
             [[ "$value" =~ ^[1-9][0-9]*$ ]] || exit 1
           done
-          [[ "$TOOL_ID" != "$VSIX_ID" && "$TOOL_DIGEST" =~ ^[a-fA-F0-9]{64}$ && "$VSIX_SHA256" =~ ^[a-fA-F0-9]{64}$ ]]
+          [[ "$TOOL_ID" != "$VSIX_ID" && "$TOOL_DIGEST" =~ ^[a-fA-F0-9]{64}$ && "$VSIX_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || exit 1
+          if [[ "$TOOL_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" || "$BUILD_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]]; then
+            echo "Verification or build belongs to a different attempt. Re-run all jobs to check the tag and current CI." >&2
+            exit 1
+          fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
