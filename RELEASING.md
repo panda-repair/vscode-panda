@@ -14,7 +14,7 @@ GitHub Actions supplies the short-lived publishing identity to `vsce publish --o
 
 ## Review and publish
 
-1. For a new version, update `package.json` and the lockfile with `npm version X.Y.Z --no-git-tag-version`. Merge the reviewed changes to `main`. Wait for the **Check extension** workflow for that exact push to succeed.
+1. For a new version, run `npm version X.Y.Z --no-git-tag-version` to update `package.json` and the lockfile in your checkout. Running `npm run package -- patch --no-git-tag-version` changes the version only in the staged VSIX. Merge the reviewed changes to `main`. Wait for the **Check extension** workflow for that exact push to succeed.
 2. From a clean checkout of the intended commit, build and inspect the archive. The packaging command builds in a temporary directory with normalized file modes. Record both the first command's full commit SHA and the last command's VSIX SHA-256 in the release approval. The commands below build version 0.1.0.
 
    ```sh

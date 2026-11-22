@@ -83,6 +83,11 @@ cp.execFileSync = (file, args, options) => {
     assert.equal(readFileSync(env.GITHUB_OUTPUT, "utf8"), allowed ? expected : "", name);
   }
   cases.forEach(check);
+  tagRelease("approved-inner", sha);
+  git("tag", "-d", "v0.1.0");
+  git("-c", "advice.nestedTag=false", "tag", "-a", "-m", approval, "-m", "object " + sha + "\ntype commit",
+    "v0.1.0", "approved-inner");
+  check(["both annotations approve the digest, but the release tag targets another tag", {}]);
   const signature = "-----BEGIN SSH SIGNATURE-----\n" + approval + "\n-----END SSH SIGNATURE-----";
   for (const [name, text, allowed] of [
     ["lightweight tag", null], ["missing digest line", "Release approved without a checksum"],

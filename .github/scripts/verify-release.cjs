@@ -10,15 +10,20 @@ function command(executable, args, failure) {
 }
 
 function approvedDigest(tag, sha, submitted) {
-  // Git separates the signature without running a verifier. Keep the tag message's original lines.
-  const format = "%(objecttype)%00%(*objectname)%00%(contents)%00%(contents:signature)";
-  const record = command("git", ["tag", "--list", tag, "--format=" + format], "Could not read the release tag.");
+  // Capture the outer object and its signature together, even if the ref moves afterwards.
+  const format = "%(objecttype)%00%(objectname)%00%(contents:signature)";
+  const record = command("git", ["--no-replace-objects", "tag", "--list", tag, "--format=" + format], "Could not read the release tag.");
   const fields = record.slice(0, -1).split("\0");
-  const [type, target, contents, signature] = fields;
-  if (fields.length !== 4 || type !== "tag" || !contents.endsWith(signature)) {
-    throw new Error("Expected an annotated release tag.");
+  const [type, objectId, signature] = fields;
+  if (fields.length !== 3 || type !== "tag") throw new Error("Expected an annotated release tag.");
+  const raw = command("git", ["--no-replace-objects", "cat-file", "tag", objectId], "Could not read the annotated release tag.");
+  const headerEnd = raw.indexOf("\n\n");
+  const [objectHeader, typeHeader] = raw.slice(0, headerEnd).split("\n", 2);
+  if (headerEnd < 0 || objectHeader !== "object " + sha || typeHeader !== "type commit") {
+    throw new Error("The release tag must point directly to the exact reviewed commit.");
   }
-  if (target !== sha) throw new Error("The release tag must point to the exact reviewed commit.");
+  const contents = raw.slice(headerEnd + 2);
+  if (contents.includes("\0") || !contents.endsWith(signature)) throw new Error("Invalid release tag message.");
   const message = contents.slice(0, contents.length - signature.length);
   const lines = message.split("\n").filter(line => line.trimStart().toLowerCase().startsWith("vsix-sha256"));
   const digest = /^vsix-sha256: ([a-fA-F0-9]{64})$/.exec(lines[0])?.[1].toLowerCase();
