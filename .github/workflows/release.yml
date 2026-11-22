@@ -1,64 +1,158 @@
 name: Release to Visual Studio Marketplace
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Reviewed release tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      sha:
+        description: Reviewed commit (40 hexadecimal characters)
+        required: true
+        type: string
+      vsix_sha256:
+        description: Approved VSIX SHA-256 (64 hexadecimal characters)
+        required: true
+        type: string
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
+  verify:
+    if: github.repository == 'panda-repair/vscode-panda' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: marketplace
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.review.outputs.sha }}
+      epoch: ${{ steps.review.outputs.epoch }}
+      tool_id: ${{ steps.tools.outputs.artifact-id }}
+      tool_digest: ${{ steps.tools.outputs.artifact-digest }}
+      attempt: ${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           package-manager-cache: false
-
-      - name: Check release tag and main
-        id: release
-        shell: bash
+      - name: Verify the tag, reviewed commit and main CI
+        id: review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REVIEWED_SHA: ${{ inputs.sha }}
+          VSIX_SHA256: ${{ inputs.vsix_sha256 }}
+        run: node .github/scripts/verify-release.cjs
+      - name: Prepare the publishing CLI from protected main's lockfile
         run: |
-          node <<'NODE'
-          const { version } = require("./package.json");
-          const stable = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
-          if (typeof version !== "string" || !stable.test(version)) {
-            console.error("Expected a stable MAJOR.MINOR.PATCH version in package.json.");
-            process.exit(1);
-          }
-          if ("v" + version !== process.env.GITHUB_REF_NAME) {
-            console.error("The release tag must equal v followed by the package.json version.");
-            process.exit(1);
-          }
-          NODE
-          if ! main_sha="$(git show-ref --verify --hash refs/remotes/origin/main)"; then
-            echo "Cannot verify the release without origin/main." >&2
-            exit 1
-          fi
-          tag_commit="$(git rev-parse --verify "${GITHUB_SHA}^{commit}")"
-          if ! git merge-base --is-ancestor "$tag_commit" "$main_sha"; then
-            echo "The tagged commit must be on main." >&2
-            exit 1
-          fi
-          epoch="$(git show -s --format=%ct "$tag_commit")"
-          echo "vsix=panda-${GITHUB_REF_NAME#v}.vsix" >> "$GITHUB_OUTPUT"
-          echo "epoch=$epoch" >> "$GITHUB_OUTPUT"
+          npm ci --ignore-scripts
+          tar -czf "$RUNNER_TEMP/vsce-$GITHUB_RUN_ATTEMPT.tgz" node_modules
+      - name: Save the trusted publishing tool
+        id: tools
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/vsce-${{ github.run_attempt }}.tgz
+          archive: false
+          if-no-files-found: error
 
-      - run: npm ci
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      vsix_id: ${{ steps.package.outputs.artifact-id }}
+      attempt: ${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Install the reviewed commit's dependencies
+        env:
+          REVIEWED_SHA: ${{ needs.verify.outputs.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
+          npm ci
       - run: npm test
-      - name: Package the tagged source
+      - name: Build and verify the reviewed archive
+        shell: bash
         env:
           TZ: UTC
-          SOURCE_DATE_EPOCH: ${{ steps.release.outputs.epoch }}
-          VSIX: ${{ steps.release.outputs.vsix }}
-        run: npm run package -- --out "$VSIX"
-      - name: Publish the packaged VSIX with OIDC
-        env:
-          VSIX: ${{ steps.release.outputs.vsix }}
-        run: ./node_modules/.bin/vsce publish --oidc --packagePath "$VSIX"
+          SOURCE_DATE_EPOCH: ${{ needs.verify.outputs.epoch }}
+          VSIX_SHA256: ${{ inputs.vsix_sha256 }}
+        run: |
+          file="$RUNNER_TEMP/panda-$GITHUB_RUN_ATTEMPT.vsix"
+          npm run package -- --out "$file"
+          [[ -f "$file" && ! -L "$file" ]]
+          printf '%s  %s\n' "$VSIX_SHA256" "$file" | shasum -a 256 --check --strict
+      - name: Save the approved VSIX as a single file
+        id: package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/panda-${{ github.run_attempt }}.vsix
+          archive: false
+          if-no-files-found: error
+
+  publish:
+    needs: [verify, build]
+    if: github.repository == 'panda-repair/vscode-panda' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: marketplace
+    permissions:
+      id-token: write
+    env:
+      TOOL_ID: ${{ needs.verify.outputs.tool_id }}
+      VSIX_ID: ${{ needs.build.outputs.vsix_id }}
+      TOOL_ATTEMPT: ${{ needs.verify.outputs.attempt }}
+      BUILD_ATTEMPT: ${{ needs.build.outputs.attempt }}
+      TOOL_DIGEST: ${{ needs.verify.outputs.tool_digest }}
+      VSIX_SHA256: ${{ inputs.vsix_sha256 }}
+    steps:
+      - name: Require one distinct artifact ID from each job
+        shell: bash
+        run: |
+          for value in "$TOOL_ID" "$VSIX_ID" "$TOOL_ATTEMPT" "$BUILD_ATTEMPT"; do
+            [[ "$value" =~ ^[1-9][0-9]*$ ]] || exit 1
+          done
+          [[ "$TOOL_ID" != "$VSIX_ID" && "$TOOL_DIGEST" =~ ^[a-fA-F0-9]{64}$ && "$VSIX_SHA256" =~ ^[a-fA-F0-9]{64}$ ]]
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Download the publisher tool by ID
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.verify.outputs.tool_id }}
+          path: ${{ runner.temp }}/tool-input
+          skip-decompress: true
+          digest-mismatch: error
+      - name: Download the VSIX by ID without unpacking it
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.vsix_id }}
+          path: ${{ runner.temp }}/vsix-input
+          skip-decompress: true
+          digest-mismatch: error
+      - name: Verify received bytes and unpack only the trusted tool
+        shell: bash
+        run: |
+          tool="$RUNNER_TEMP/tool-input/vsce-$TOOL_ATTEMPT.tgz"
+          vsix="$RUNNER_TEMP/vsix-input/panda-$BUILD_ATTEMPT.vsix"
+          for file in "$tool" "$vsix"; do
+            [[ -f "$file" && ! -L "$file" ]] || exit 1
+          done
+          printf '%s  %s\n' "$VSIX_SHA256" "$vsix" | shasum -a 256 --check --strict
+          printf '%s  %s\n' "$TOOL_DIGEST" "$tool" | shasum -a 256 --check --strict
+          mkdir "$RUNNER_TEMP/publisher"
+          tar -xzf "$tool" -C "$RUNNER_TEMP/publisher"
+      - name: Publish the verified VSIX
+        run: '"$RUNNER_TEMP/publisher/node_modules/.bin/vsce" publish --oidc --packagePath "$RUNNER_TEMP/vsix-input/panda-$BUILD_ATTEMPT.vsix"'
