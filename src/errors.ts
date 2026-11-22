@@ -5,6 +5,7 @@ export class PandaError extends Error {
 }
 
 export const GENERATE_ANOTHER = "Generate another answer (may incur a charge)";
+export const PROXY_AUTH_REQUIRED = "The network proxy requires authentication. Check the proxy address and credentials.";
 
 export class PandaOutputLimit extends PandaError {
   constructor() { super("Panda reached the output token limit. The response is incomplete."); }
@@ -53,6 +54,7 @@ function replayError(payload: unknown, token: string, headerRunId?: string) {
 
 export function responseError(status: number, payload: unknown, key: string, headerRunId?: string) {
   const error = record(payload) && record(payload.error) ? payload.error : {};
+  if (status === 407) return new PandaError(PROXY_AUTH_REQUIRED);
   if (status === 401) return new PandaError("The Panda API key is wrong or expired. Update it with Panda: Manage API Key.", "auth");
   if (status === 403) return new PandaError("This Panda key does not permit the requested operation.", "auth");
   if (status === 402 || status === 429) {

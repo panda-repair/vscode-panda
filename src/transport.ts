@@ -1,9 +1,9 @@
-import { request as hostRequest } from "https";
-import type { IncomingHttpHeaders } from "node:http";
+import { globalAgent, request as hostRequest } from "https";
+import { validateHeaderValue, type IncomingHttpHeaders } from "node:http";
 import type { Readable } from "node:stream";
 import { getCACertificates } from "node:tls";
-import { Agent, Pool, ProxyAgent, request } from "undici";
-import { PandaError } from "./errors";
+import { Agent, Pool, ProxyAgent, errors, request } from "undici";
+import { PandaError, PROXY_AUTH_REQUIRED, record } from "./errors";
 
 export const IDLE_TIMEOUT_MS = 600_000;
 const timeouts = { headersTimeout: IDLE_TIMEOUT_MS, bodyTimeout: IDLE_TIMEOUT_MS };
@@ -46,15 +46,32 @@ function timeoutError() { return Object.assign(new Error("Panda connection timed
 
 // VS Code patches its extension's native HTTPS request to resolve the system proxy and PAC.
 // Explicit timeouts here cover the connection/headers and each subsequent body idle period.
-function systemRequest(url: URL, headers: Record<string, string>, body: string | undefined, signal: AbortSignal): Promise<Response> {
+function systemRequest(url: URL, headers: Record<string, string>, body: string | undefined, signal: AbortSignal,
+  settings: NetworkSettings): Promise<Response> {
   return new Promise((resolve, reject) => {
-    const req = hostRequest(url, { method: body === undefined ? "GET" : "POST", headers, signal }, res => {
+    const ca = systemRoots(settings.systemCertificates);
+    const req = hostRequest(url, { method: body === undefined ? "GET" : "POST", headers, signal, ca, rejectUnauthorized: true }, res => {
       clearTimeout(timer);
       res.setTimeout(IDLE_TIMEOUT_MS, () => res.destroy(timeoutError()));
       resolve({ statusCode: res.statusCode!, headers: res.headers, body: res });
     });
     const timer = setTimeout(() => req.destroy(timeoutError()), IDLE_TIMEOUT_MS).unref();
     req.once("error", error => { clearTimeout(timer); reject(error); });
+    // VS Code gives each native request its own PacProxyAgent. Its public opts
+    // configure the CONNECT hop after PAC resolution, separately from origin TLS.
+    const agent = "agent" in req ? req.agent : undefined;
+    if (agent !== globalAgent && record(agent) && typeof agent.resolver === "function" &&
+        typeof agent.addCAs === "function" && record(agent.opts)) {
+      agent.opts.ca = ca;
+      agent.opts.rejectUnauthorized = settings.proxyStrictSSL !== false;
+      if (settings.proxyAuthorization) {
+        agent.opts.headers = { "Proxy-Authorization": settings.proxyAuthorization };
+        agent.opts.lookupProxyAuthorization = undefined; // The user's configured credential owns this CONNECT.
+      }
+    } else if (settings.proxyAuthorization || settings.proxyStrictSSL === false) {
+      req.destroy(new PandaError("Set an explicit HTTP or HTTPS proxy in VS Code to apply these proxy settings."));
+      return;
+    }
     req.end(body);
   });
 }
@@ -83,13 +100,17 @@ export class Transport {
     try {
       const auth = settings.proxyAuthorization || "";
       if (route.kind !== "direct") {
+        if (auth) {
+          try { validateHeaderValue("Proxy-Authorization", auth); }
+          catch { throw new PandaError("Check the proxy credentials in VS Code."); }
+        }
         const proxy = "proxy" in route ? route.proxy : undefined;
         const credentials = proxy ? decodeURIComponent(proxy.username) + ":" + decodeURIComponent(proxy.password) : "";
         const basic = /^Basic\s+([\w+/=]+)$/i.exec(auth);
         if ([auth, credentials, basic ? Buffer.from(basic[1]!, "base64").toString("utf8") : ""].some(value =>
           value.includes(key) || /pnd_it_/i.test(value))) throw new PandaError("Use separate credentials for Panda and the proxy.");
       }
-      if (route.kind === "host") response = await systemRequest(url, headers, body, signal);
+      if (route.kind === "host") response = await systemRequest(url, headers, body, signal, settings);
       else {
         if (route.kind === "proxy") {
           const ca = systemRoots(settings.systemCertificates);
@@ -107,6 +128,11 @@ export class Transport {
           headers, body, signal, ...timeouts, idempotent: false });
       }
       return await consume(response);
+    } catch (error) {
+      // Undici 7.30 reports a rejected CONNECT as an abort, outside the HTTP response path.
+      if (route.kind === "proxy" && error instanceof errors.RequestAbortedError &&
+          error.message === "Proxy response (407) !== 200 when HTTP Tunneling") throw new PandaError(PROXY_AUTH_REQUIRED);
+      throw error;
     } finally {
       if (response) { response.body.on("error", () => {}); response.body.destroy(); }
       if (scoped) await scoped.destroy();

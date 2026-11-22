@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
-const { mkdtempSync, rmSync } = require("node:fs");
+const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { tmpdir } = require("node:os");
 const { proxyFixture } = require("./proxy-fixture.cjs");
@@ -57,4 +57,18 @@ test("a real HTTP or HTTPS CONNECT tunnel keeps the bearer at the TLS origin, ho
   assert.ok(!fixture.requests.some(r => r.path === "/must-never-follow"));
   assert.ok(fixture.tunnels.every(t => !t.leaked && !t.hasOriginAuthorization));
   assert.ok(fixture.requests.every(r => r.bearer && !r.proxyAuth));
+
+  const beforeDenied = fixture.requests.length;
+  const authError = "The network proxy requires authentication. Check the proxy address and credentials.";
+  assert.equal((await probe({ proxy: fixture.requiredHttp, proxyAuthorization: "Bearer wrong-fixture" })).error, authError);
+  assert.equal((await probe({ proxy: fixture.requiredHttps, proxyStrictSSL: false })).error, authError);
+  assert.match((await probe({}, fixture.untrustedDirect, { NODE_TLS_REJECT_UNAUTHORIZED: "0" })).error, /connection/);
+  assert.equal(fixture.requests.length, beforeDenied);
+  assert.equal((await probe({ proxy: fixture.requiredHttps, proxyAuthorization: fixture.requiredAuth,
+    proxyStrictSSL: false })).text, "tunnel answer");
+  const bothCAs = join(dir, "trusted.pem");
+  writeFileSync(bothCAs, Buffer.concat([readFileSync(fixture.ca), readFileSync(join(dir, "proxy-ca.pem"))]));
+  assert.equal((await probe({ proxy: fixture.requiredHttps, proxyAuthorization: fixture.requiredAuth,
+    proxyStrictSSL: true }, fixture.endpoint, { NODE_EXTRA_CA_CERTS: bothCAs })).text, "tunnel answer");
+  assert.ok(fixture.requests.every(req => req.trustedOrigin && req.bearer && !req.proxyAuth));
 });

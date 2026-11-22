@@ -36,11 +36,11 @@ The default API base URL is `https://app.panda.repair/v1`. To use another Panda 
 
 For corporate networks, set `http.proxy` in VS Code User Settings or set `HTTPS_PROXY` in the environment. The user setting takes precedence. A nonempty `http.noProxy` list controls bypasses, otherwise `NO_PROXY` applies. Without a fixed proxy, VS Code can use its system proxy or PAC configuration. Set `http.proxySupport` to `off` for a direct connection. Local HTTP stays on loopback.
 
-An HTTP or HTTPS proxy receives a CONNECT request. The Panda token travels inside the TLS tunnel to the API origin. Use `http.systemCertificates` to trust corporate certificate authorities. For a configured HTTPS proxy, `http.proxyStrictSSL` controls verification of the proxy’s certificate. The extension verifies the origin’s certificate separately. Both ten-minute timeouts also apply through a proxy.
+Use `http.proxyAuthorization` for a proxy that requires credentials and `http.systemCertificates` to trust corporate certificate authorities. For an HTTPS proxy, `http.proxyStrictSSL` controls verification of the proxy’s certificate, including when VS Code selects it through PAC. The extension verifies the origin’s certificate separately. Both ten-minute timeouts also apply through a proxy.
 
 ## Where your data goes
 
-Panda receives the selected model, conversation text, tool definitions, tool-call arguments and tool results. The token is sent only to the configured endpoint as a bearer credential.
+Panda receives the selected model, conversation text, tool definitions, tool-call arguments and tool results. The extension sends the Panda bearer inside the TLS connection to the API and omits it from CONNECT. A corporate gateway that inspects TLS using a CA you trust can read the bearer and the conversation.
 
 For tool-free requests with an eligible credential, `auto` can send a writing request directly to GLM-5.3 Flash on OpenRouter, and `auto:quality` can send a request directly to Gemini on Google Vertex AI. Under Zero ADR 0070’s routing rules, these two selectors can send up to 2,000 characters from the start of the latest user message to Cloudflare Workers AI to classify the task.
 

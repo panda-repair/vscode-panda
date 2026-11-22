@@ -86,13 +86,14 @@ async function main() {
       extensionTestsPath: join(extension, "host.cjs"), extensionTestsEnv: { PANDA_FIXTURE_ENDPOINT: endpoint,
         PANDA_FIXTURE_SYNC: sync, PANDA_EXPECTED_VERSION: process.env.VSCODE_TEST_EXECUTABLE ? process.env.VSCODE_TEST_VERSION || "" : version,
         PANDA_PROXY_FIXTURE: JSON.stringify({ endpoint: network.endpoint, bypass: network.bypass, httpProxy: network.httpProxy,
-          httpsProxy: network.httpsProxy }), NODE_EXTRA_CA_CERTS: network.ca, HTTP_PROXY: "", HTTPS_PROXY: "", NO_PROXY: "",
+          httpsProxy: network.httpsProxy, requiredAuth: network.requiredAuth, office: network.office, untrusted: network.untrusted }),
+        NODE_EXTRA_CA_CERTS: network.ca, NODE_TLS_REJECT_UNAUTHORIZED: "0", HTTP_PROXY: "", HTTPS_PROXY: "", NO_PROXY: "",
         http_proxy: "", https_proxy: "", no_proxy: "" },
       launchArgs: [workspace, "--user-data-dir=" + profile, "--extensions-dir=" + join(root, "extensions"),
         "--disable-extensions", "--disable-gpu", "--no-sandbox", "--use-inmemory-secretstorage", "--use-mock-keychain",
         "--disable-telemetry", "--disable-updates", "--disable-workspace-trust", "--skip-welcome", "--skip-release-notes",
         "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-crash-reporter",
-        "--proxy-server=" + network.httpProxy, "--proxy-bypass-list=localhost;127.0.0.1;[::1]"],
+        "--proxy-pac-url=" + network.pacUrl],
     });
     assert.ok(gets >= 6);
     assert.deepEqual(issues, []);
@@ -103,16 +104,22 @@ async function main() {
       ["system", "user"], ["system", "user", "assistant", "tool"]]);
     const networkPosts = network.requests.filter(req => req.method === "POST");
     assert.deepEqual(networkPosts.map(req => JSON.parse(req.body).messages[0].content),
-      ["fixed proxy", "HTTPS proxy only", "environment proxy", "system proxy", "bypass proxy"]);
-    assert.deepEqual(networkPosts.map(req => req.via), ["http", "https", "http", "http", "direct"]);
-    assert.ok(network.requests.every(req => req.bearer && !req.proxyAuth));
+      ["fixed proxy", "HTTPS proxy only", "environment proxy", "HTTPS PAC proxy", "HTTP PAC proxy", "PAC DIRECT", "bypass proxy"]);
+    assert.deepEqual(networkPosts.map(req => req.via), ["http", "https", "http", "https", "http", "direct", "direct"]);
+    assert.ok(network.pacReads.length > 0 && network.pacReads.every(req => !req.originAuth && !req.proxyAuth));
+    assert.ok(network.tunnels.some(req => req.requireAuth && !req.accepted));
+    for (const kind of ["http", "https"]) {
+      assert.ok(network.tunnels.some(req => req.kind === kind && req.requireAuth && req.accepted &&
+        req.proxyAuthorization === network.requiredAuth));
+    }
+    assert.ok(network.requests.every(req => req.trustedOrigin && req.bearer && !req.proxyAuth));
     assert.ok(network.tunnels.every(req => !req.hasOriginAuthorization && !req.leaked));
     assert.ok(network.tunnels.some(req => req.kind === "https"));
     const actualVersion = readFileSync(join(sync, "host-version"), "utf8");
     console.log("Panda integration passed on stock VS Code " + actualVersion + " (" + gets + " catalog GETs, " + posts +
       " chat POSTs; native cancellation closed both sockets; " + proof.replayPosts + " replay-scenario POSTs, " +
       proof.replayAdmissions + " admissions). TLS origin received " + (network.requests.length - networkPosts.length) +
-      " catalog GETs and " + networkPosts.length + " chat POSTs via HTTP/HTTPS/environment/system/bypass routes.");
+      " catalog GETs and " + networkPosts.length + " chat POSTs via fixed, environment, HTTP/HTTPS PAC and bypass routes.");
   } finally {
     await network.close();
     server.closeAllConnections();
