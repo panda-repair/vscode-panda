@@ -67,4 +67,21 @@ exports.run = async (model, observer) => {
   await denied();
   for (const offer of observer.offers.splice(0)) offer.dismiss();
   for (const panel of observer.panels.splice(0)) panel.dispose();
+
+  const limited = [user("probe:output-limit")];
+  let visible = "";
+  try { await invoke(model, limited, undefined, part => { visible += part; }); }
+  catch (error) { assert.match(error.message, /output token limit/); }
+  assert.equal(visible, "The first half");
+  await assert.rejects(invoke(model, limited), /run-limited-1.*completed.*USD 0\.03/);
+  await until(() => observer.offers.some(o => o.message.includes("run-limited-1")), "paid follow-up offer");
+  const offer = observer.offers.find(o => o.message.includes("run-limited-1"));
+  assert.ok(offer.message.includes("Choose this action to request this run's follow-up. If Panda already accepted it, you'll see its status and any settled charge."));
+  offer.choose();
+  const warning = "Panda reached the output limit. This answer is incomplete.";
+  await until(() => observer.panels.some(p => p.webview.html.includes(warning)), "truncated answer in visible panel");
+  const html = observer.panels.find(p => p.webview.html.includes(warning)).webview.html;
+  assert.ok(html.includes("The first half\n\n" + warning));
+  assert.doesNotMatch(html, /unfinished_tool|unfinished-id|secret|Tool request:/);
+  for (const panel of observer.panels.splice(0)) panel.dispose();
 };

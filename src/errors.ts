@@ -6,9 +6,14 @@ export class PandaError extends Error {
 
 export const GENERATE_ANOTHER = "Generate another answer (may incur a charge)";
 
+export class PandaOutputLimit extends PandaError {
+  constructor() { super("Panda reached the output token limit. The response is incomplete."); }
+}
+
 export class PandaReplay extends PandaError {
   constructor(readonly runId: string, summary: string) {
-    super(summary + " The retry adds no charge and has no answer. To start another run, choose “" + GENERATE_ANOTHER + "”.");
+    super(summary + " The retry adds no charge and has no answer. “" + GENERATE_ANOTHER +
+      "” is available. Choose this action to request this run's follow-up. If Panda already accepted it, you'll see its status and any settled charge.");
   }
 }
 

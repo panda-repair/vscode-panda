@@ -4,7 +4,7 @@ const { frame, json, pause } = require("../fixture.cjs");
 const assert = require("node:assert/strict");
 
 exports.reviewFixture = function reviewFixture(dir) {
-  const traces = [], ledger = new Map();
+  const traces = [], ledger = new Map(), limited = new Map();
   const mark = label => writeFileSync(join(dir, label), "yes");
   const send = (res, text) => res.writeHead(200, { "content-type": "text/event-stream" }).end(frame({ content: text }, "stop"));
   function replay(res, row) {
@@ -25,6 +25,16 @@ exports.reviewFixture = function reviewFixture(dir) {
       if (label === "probe:cancel-body") {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.write(frame({ content: "visible" }));
+      }
+    } else if (label === "probe:output-limit") {
+      const previous = limited.get(key);
+      if (previous) replay(res, previous);
+      else {
+        limited.set(key, { id: "run-limited-" + (limited.size + 1), status: "completed" });
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(frame({ content: "The first " }));
+        res.end(frame({ content: "half", tool_calls: [{ index: 0, id: "unfinished-id", function: {
+          name: "unfinished_tool", arguments: '{"secret":' } }] }, "length"));
       }
     } else if (label === "probe:replay") {
       const previous = ledger.get(key);
@@ -56,6 +66,10 @@ exports.reviewFixture = function reviewFixture(dir) {
     assert.equal(ledger.size, 2);
     assert.deepEqual(replays.map(t => t.key), [original, original, fresh, original, fresh, original]);
     assert.equal(new Set(replays.map(t => t.raw)).size, 1);
+    const short = traces.filter(t => t.label === "probe:output-limit");
+    const [parent, child] = limited.keys();
+    assert.equal(limited.size, 2);
+    assert.deepEqual(short.map(t => t.key), [parent, parent, child]);
     for (const phase of ["cancel-headers", "cancel-body"])
       assert.equal(traces.filter(row => row.label === "probe:" + phase).length, 1);
     return { posts: traces.length, replayPosts: replays.length, replayAdmissions: ledger.size };

@@ -28,7 +28,7 @@ A Panel may wait for several members before sending its HTTP headers. Every sele
 
 The extension sends each chat request once. VS Code’s chat runtime can retry before it receives the first output. The same endpoint, token and wire request produce the same `Idempotency-Key`, derived from the model, messages, tool declarations, tool choice and output limit. A changed tool result or later conversation turn gets a new key. Retry or Regenerate with an identical request reuses its key. If Panda already accepted it, Panda returns HTTP 409. VS Code shows an error with no saved or fresh answer. The retry adds no charge. Changing the prompt starts a separate request that may incur a charge. To request another generation for that run, select **Generate another answer (may incur a charge)** in its replay notification and read the answer or proposed tool calls in a separate Panda panel.
 
-Choosing the same run’s action again uses the same generation key, including after reconnecting. The panel displays tool calls as text. Closing it stops the local request. The notification keeps its request in memory for up to five minutes. Retry the original turn to reopen an expired offer.
+Choosing the same run’s action again uses the same generation key, including after reconnecting. The panel displays completed tool calls as text. If Panda reaches the output limit, the panel keeps the text it received and marks the answer incomplete. Closing the panel stops the local request. The notification keeps its request in memory for up to five minutes. Retry the original turn to reopen an expired offer.
 
 ## Endpoint
 

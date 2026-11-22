@@ -1,7 +1,7 @@
 import type * as vscode from "vscode";
 import type { Access } from "./access";
 import type { FreshOperation } from "./client";
-import { GENERATE_ANOTHER, PandaError, PandaReplay } from "./errors";
+import { GENERATE_ANOTHER, PandaError, PandaOutputLimit, PandaReplay } from "./errors";
 
 type Turn = { model: string; wire: string; operation: FreshOperation; expires: NodeJS.Timeout };
 const MAX_PENDING = 4;
@@ -58,7 +58,7 @@ export class GenerateActions implements vscode.Disposable {
     const controller = new AbortController();
     panel.onDidDispose(() => { this.panels.delete(panel); controller.abort(); });
     panel.webview.html = page("Waiting for Panda…");
-    let output = "", truncated = false;
+    let output = "", truncated = false, notice = "";
     try {
       await this.access.chat(turn.model, turn.wire, controller.signal, part => {
         const fragment = "text" in part ? part.text :
@@ -67,10 +67,15 @@ export class GenerateActions implements vscode.Disposable {
         if (fragment.length > room) truncated = true;
         output += fragment.slice(0, room);
       }, (error, wire, operation) => this.offer(turn.model, error, wire, operation), turn.operation);
-      if (truncated) output += "\n\nPanda reached the display limit for this answer.";
-      if (!controller.signal.aborted) panel.webview.html = page(output || "Panda returned an empty answer.");
     } catch (error) {
-      if (!controller.signal.aborted) panel.webview.html = page(error instanceof PandaError ? error.message : "The Panda request could not be completed.");
+      if (error instanceof PandaOutputLimit) notice = "Panda reached the output limit. This answer is incomplete.";
+      else {
+        output = error instanceof PandaError ? error.message : "The Panda request could not be completed.";
+        truncated = false;
+      }
     } finally { turn.wire = ""; }
+    if (truncated) output += "\n\nPanda reached the display limit for this answer.";
+    if (notice) output += (output ? "\n\n" : "") + notice;
+    if (!controller.signal.aborted) panel.webview.html = page(output || "Panda returned an empty answer.");
   }
 }

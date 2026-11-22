@@ -130,6 +130,19 @@ test("invalid events, wrong content type, incomplete tool JSON and unconfirmed e
   await pause(10);
 });
 
+test("a length finish preserves delivered answer text and releases no incomplete tool call", async t => {
+  const { client, endpoint } = await fixture(t, (_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(frame({ content: "The first " }));
+    res.end(frame({ content: "half", tool_calls: [{ index: 0, id: "pending", function: {
+      name: "unavailable", arguments: '{"file":' } }] }, "length"));
+  });
+  const parts = [];
+  await assert.rejects(client.chat(endpoint, key, body("auto"), signal(), part => parts.push(part)),
+    require("../out/errors").PandaOutputLimit);
+  assert.deepEqual(parts, [{ text: "The first " }, { text: "half" }]);
+});
+
 test("cancellation before submission or during header/body waits closes the request and never retries", async t => {
   const connected = [Promise.withResolvers(), Promise.withResolvers()];
   const closed = [Promise.withResolvers(), Promise.withResolvers()];

@@ -1,4 +1,4 @@
-import { PandaError, record, streamError } from "./errors";
+import { PandaError, PandaOutputLimit, record, streamError } from "./errors";
 
 export type OutputPart = { text: string } | { id: string; name: string; input: object };
 const MAX_EVENT = 4 * 1024 * 1024;
@@ -84,7 +84,7 @@ export async function streamParts(body: AsyncIterable<Uint8Array>, key: string, 
     }
     if (choice.finish_reason == null) continue;
     if (choice.finish_reason === "content_filter") throw new PandaError("Panda declined this response.", "blocked");
-    if (choice.finish_reason === "length") throw new PandaError("Panda reached the output token limit. The response is incomplete.");
+    if (choice.finish_reason === "length") throw new PandaOutputLimit();
     if (!["stop", "tool_calls"].includes(String(choice.finish_reason))) throw uncertain();
     if (choice.finish_reason === "tool_calls" && !calls.size) throw new PandaError("Panda returned an incomplete tool call.");
     const ids = new Set<string>();
