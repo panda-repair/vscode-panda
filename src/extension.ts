@@ -4,9 +4,21 @@ import { PandaClient } from "./client";
 import { PandaError } from "./errors";
 import { GenerateActions } from "./generate";
 import { chatBody, tokenEstimate } from "./messages";
+import type { NetworkSettings } from "./transport";
 
 function endpoint() {
   return vscode.workspace.getConfiguration("panda").inspect<string>("baseUrl")?.globalValue ?? DEFAULT_ENDPOINT;
+}
+
+function networkSettings(): NetworkSettings {
+  const config = vscode.workspace.getConfiguration("http");
+  function setting<T>(name: string) {
+    const value = config.inspect<T>(name);
+    return value?.globalValue ?? value?.defaultValue;
+  }
+  return { proxy: setting<string>("proxy"), noProxy: setting<string[]>("noProxy"), proxySupport: setting<string>("proxySupport"),
+    proxyStrictSSL: setting<boolean>("proxyStrictSSL"), systemCertificates: setting<boolean>("systemCertificates"),
+    proxyAuthorization: setting<string>("proxyAuthorization") };
 }
 
 function publicError(error: unknown): Error {
@@ -31,7 +43,7 @@ async function cancellable<T>(token: vscode.CancellationToken, operation: (signa
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  const client = new PandaClient();
+  const client = new PandaClient(networkSettings);
   const access = new Access(context.secrets, endpoint, client);
   const generations = new GenerateActions(access, vscode);
   const updates = new vscode.EventEmitter<void>();

@@ -71,4 +71,5 @@ exports.run = async () => {
   await select(["auto"]);
   await secrets.delete(slot);
   await select([]);
+  await require("./proxy-host.cjs").verifyProxy(secrets, select);
 };

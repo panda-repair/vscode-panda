@@ -6,6 +6,7 @@ const http = require("node:http");
 const assert = require("node:assert/strict");
 const { frame } = require("../fixture.cjs");
 const { reviewFixture } = require("./review-fixture.cjs");
+const { proxyFixture } = require("../proxy-fixture.cjs");
 
 async function main() {
   const version = process.env.VSCODE_TEST_VERSION || "1.127.0";
@@ -22,6 +23,7 @@ async function main() {
   }
   const sync = join(root, "sync"); mkdirSync(sync);
   const probes = reviewFixture(sync);
+  const network = await proxyFixture(join(root, "tls"));
   const issues = [];
   let gets = 0, posts = 0;
   const roles = [], keys = [];
@@ -71,7 +73,7 @@ async function main() {
     writeFileSync(join(extension, "package.json"), JSON.stringify({ ...manifest, main: "./test-entry.cjs" }));
     copyFileSync("dist/extension.js", join(extension, "dist", "extension.js"));
     copyFileSync(join(__dirname, "entry.cjs"), join(extension, "test-entry.cjs"));
-    for (const name of ["host.cjs", "review-host.cjs", "copilot.cjs"]) copyFileSync(join(__dirname, name), join(extension, name));
+    for (const name of ["host.cjs", "review-host.cjs", "copilot.cjs", "proxy-host.cjs"]) copyFileSync(join(__dirname, name), join(extension, name));
     writeFileSync(join(workspace, "marker.txt"), "marker from the local fixture");
     mkdirSync(join(workspace, ".vscode"));
     writeFileSync(join(workspace, ".vscode", "settings.json"), JSON.stringify({ "panda.baseUrl": "http://127.0.0.1:1/v1" }));
@@ -82,12 +84,15 @@ async function main() {
     }));
     await runTests({ vscodeExecutablePath: executable, extensionDevelopmentPath: extension,
       extensionTestsPath: join(extension, "host.cjs"), extensionTestsEnv: { PANDA_FIXTURE_ENDPOINT: endpoint,
-        PANDA_FIXTURE_SYNC: sync, PANDA_EXPECTED_VERSION: process.env.VSCODE_TEST_EXECUTABLE ? process.env.VSCODE_TEST_VERSION || "" : version },
+        PANDA_FIXTURE_SYNC: sync, PANDA_EXPECTED_VERSION: process.env.VSCODE_TEST_EXECUTABLE ? process.env.VSCODE_TEST_VERSION || "" : version,
+        PANDA_PROXY_FIXTURE: JSON.stringify({ endpoint: network.endpoint, bypass: network.bypass, httpProxy: network.httpProxy,
+          httpsProxy: network.httpsProxy }), NODE_EXTRA_CA_CERTS: network.ca, HTTP_PROXY: "", HTTPS_PROXY: "", NO_PROXY: "",
+        http_proxy: "", https_proxy: "", no_proxy: "" },
       launchArgs: [workspace, "--user-data-dir=" + profile, "--extensions-dir=" + join(root, "extensions"),
         "--disable-extensions", "--disable-gpu", "--no-sandbox", "--use-inmemory-secretstorage", "--use-mock-keychain",
         "--disable-telemetry", "--disable-updates", "--disable-workspace-trust", "--skip-welcome", "--skip-release-notes",
         "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-crash-reporter",
-        "--proxy-server=http://127.0.0.1:1", "--proxy-bypass-list=localhost;127.0.0.1;[::1]"],
+        "--proxy-server=" + network.httpProxy, "--proxy-bypass-list=localhost;127.0.0.1;[::1]"],
     });
     assert.ok(gets >= 6);
     assert.deepEqual(issues, []);
@@ -96,11 +101,20 @@ async function main() {
     assert.equal(new Set(keys).size, 4);
     assert.deepEqual(roles, [["user"], ["user", "assistant", "tool"],
       ["system", "user"], ["system", "user", "assistant", "tool"]]);
+    const networkPosts = network.requests.filter(req => req.method === "POST");
+    assert.deepEqual(networkPosts.map(req => JSON.parse(req.body).messages[0].content),
+      ["fixed proxy", "HTTPS proxy only", "environment proxy", "system proxy", "bypass proxy"]);
+    assert.deepEqual(networkPosts.map(req => req.via), ["http", "https", "http", "http", "direct"]);
+    assert.ok(network.requests.every(req => req.bearer && !req.proxyAuth));
+    assert.ok(network.tunnels.every(req => !req.hasOriginAuthorization && !req.leaked));
+    assert.ok(network.tunnels.some(req => req.kind === "https"));
     const actualVersion = readFileSync(join(sync, "host-version"), "utf8");
     console.log("Panda integration passed on stock VS Code " + actualVersion + " (" + gets + " catalog GETs, " + posts +
       " chat POSTs; native cancellation closed both sockets; " + proof.replayPosts + " replay-scenario POSTs, " +
-      proof.replayAdmissions + " admissions).");
+      proof.replayAdmissions + " admissions). TLS origin received " + (network.requests.length - networkPosts.length) +
+      " catalog GETs and " + networkPosts.length + " chat POSTs via HTTP/HTTPS/environment/system/bypass routes.");
   } finally {
+    await network.close();
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
     rmSync(root, { recursive: true, force: true });

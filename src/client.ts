@@ -1,11 +1,10 @@
-import { Agent, request } from "undici";
-import type { Dispatcher } from "undici";
+import { Transport, NetworkSettings, Response } from "./transport";
 import { grantedModels } from "./catalog";
 import { PandaError, record, responseError } from "./errors";
 import { canonicalJSON, idempotencyKey } from "./messages";
 import { streamParts, OutputPart } from "./stream";
 
-export const IDLE_TIMEOUT_MS = 600_000;
+export { IDLE_TIMEOUT_MS } from "./transport";
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 
 export type FreshOperation = { originalKey: string; afterRun: string };
@@ -22,34 +21,25 @@ async function boundedJSON(body: AsyncIterable<Uint8Array>): Promise<unknown> {
 }
 
 export class PandaClient {
-  private readonly agent = new Agent({ headersTimeout: IDLE_TIMEOUT_MS, bodyTimeout: IDLE_TIMEOUT_MS,
-    pipelining: 0, allowH2: false });
+  private readonly transport: Transport;
+  constructor(settings: () => NetworkSettings = () => ({})) { this.transport = new Transport(settings); }
 
-  async close() { await this.agent.destroy(); }
+  close() { return this.transport.close(); }
 
   private async exchange<T>(endpoint: string, path: string, key: string, wire: { body: string; key: string } | undefined, signal: AbortSignal,
-    consume: (response: Dispatcher.ResponseData) => Promise<T>): Promise<T> {
+    consume: (response: Response) => Promise<T>): Promise<T> {
     signal.throwIfAborted();
     try {
-      const response = await request(endpoint + path, { dispatcher: this.agent, method: wire ? "POST" : "GET",
-        headersTimeout: IDLE_TIMEOUT_MS, bodyTimeout: IDLE_TIMEOUT_MS, signal, idempotent: false,
-        headers: { authorization: "Bearer " + key, accept: wire ? "text/event-stream" : "application/json",
-          ...(wire && { "content-type": "application/json", "idempotency-key": wire.key }) },
-        body: wire?.body,
-      });
-      try {
+      const headers = { authorization: "Bearer " + key, accept: wire ? "text/event-stream" : "application/json",
+        ...(wire && { "content-type": "application/json", "idempotency-key": wire.key }) };
+      return await this.transport.exchange(endpoint + path, key, headers, wire?.body, signal, async response => {
         if (response.statusCode < 200 || response.statusCode >= 300) {
           const payload = [400, 402, 409, 429].includes(response.statusCode) ? await boundedJSON(response.body) : undefined;
           const run = response.headers["x-panda-request-id"];
           throw responseError(response.statusCode, payload, key, typeof run === "string" ? run : undefined);
         }
         return await consume(response);
-      } finally {
-        // Discard redirects and other unread bodies. Undici signals that disposal
-        // asynchronously, after the response error has already been returned.
-        response.body.on("error", () => {});
-        response.body.destroy();
-      }
+      });
     } catch (error) {
       if (signal.aborted) throw signal.reason;
       if (error instanceof PandaError) throw error;

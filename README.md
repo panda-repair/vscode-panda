@@ -34,6 +34,10 @@ Choosing the same run’s action again uses the same generation key, including a
 
 The default API base URL is `https://app.panda.repair/v1`. To use another Panda endpoint, set `panda.baseUrl` in **User Settings**, including the `/v1` path. Each normalized endpoint has its own SecretStorage entry. Changing the endpoint requires a key saved for that endpoint. Workspace settings cannot redirect a saved key. Use HTTPS, or HTTP on loopback for local testing. The extension rejects HTTP redirects.
 
+For corporate networks, set `http.proxy` in VS Code User Settings or set `HTTPS_PROXY` in the environment. The user setting takes precedence. A nonempty `http.noProxy` list controls bypasses, otherwise `NO_PROXY` applies. Without a fixed proxy, VS Code can use its system proxy or PAC configuration. Set `http.proxySupport` to `off` for a direct connection. Local HTTP stays on loopback.
+
+An HTTP or HTTPS proxy receives a CONNECT request. The Panda token travels inside the TLS tunnel to the API origin. Use `http.systemCertificates` to trust corporate certificate authorities. For a configured HTTPS proxy, `http.proxyStrictSSL` controls verification of the proxy’s certificate. The extension verifies the origin’s certificate separately. Both ten-minute timeouts also apply through a proxy.
+
 ## Where your data goes
 
 Panda receives the selected model, conversation text, tool definitions, tool-call arguments and tool results. The token is sent only to the configured endpoint as a bearer credential.
@@ -46,7 +50,7 @@ Panda's privacy policy says it retains billing metadata and does not retain API 
 
 ## Development
 
-Use Node.js 24 and run `npm ci`, `npm test` and `npm run test:integration`. The integration runner uses a fresh profile, synthetic keys and a loopback API. It downloads stock VS Code 1.127.0 by default. Set `VSCODE_TEST_VERSION=stable` to test the current stable release, `VSCODE_TEST_EXECUTABLE` to an existing executable for offline use, or `VSCODE_TEST_CACHE` to choose a download cache. On headless Linux use `xvfb-run -a npm run test:integration`.
+Use Node.js 24 and OpenSSL to run `npm ci`, `npm test` and `npm run test:integration`. The integration runner uses a fresh profile, synthetic keys and a loopback API. It downloads stock VS Code 1.127.0 by default. Set `VSCODE_TEST_VERSION=stable` to test the current stable release, `VSCODE_TEST_EXECUTABLE` to an existing executable for offline use, or `VSCODE_TEST_CACHE` to choose a download cache. On headless Linux use `xvfb-run -a npm run test:integration`.
 
 Build a reproducible VSIX from a clean commit with `TZ=UTC SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" npm run package`. `panda-repair` is the placeholder publisher for this local VSIX. Confirm the Marketplace publisher ID before publishing.
 
