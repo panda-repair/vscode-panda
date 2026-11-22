@@ -32,7 +32,7 @@ function approvedDigest(tag, sha, submitted) {
   return digest;
 }
 
-function checkCI(sha) {
+function checkCI(sha, approved) {
   const url = "repos/" + repository + "/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=" + sha + "&per_page=100";
   const pages = JSON.parse(command("gh", ["api", "--paginate", "--slurp", url], "Could not read the CI runs."));
   const runs = pages.flatMap(page => page.workflow_runs);
@@ -52,6 +52,20 @@ function checkCI(sha) {
   if (latest.status !== "completed" || latest.conclusion !== "success") {
     throw new Error("The latest main push CI for the reviewed commit must be complete and successful.");
   }
+  if (![latest.id, latest.run_attempt].every(n => Number.isSafeInteger(n) && n > 0)) {
+    throw new Error("Expected a CI run ID and attempt for the canonical package.");
+  }
+  const name = `canonical-panda-${latest.run_attempt}.vsix`;
+  const path = `repos/${repository}/actions/runs/${latest.id}/artifacts?name=${name}&per_page=100`;
+  const listing = JSON.parse(command("gh", ["api", path], "Could not read the canonical CI artifact."));
+  const [artifact] = listing.artifacts;
+  const source = artifact?.workflow_run;
+  if (listing.total_count !== 1 || listing.artifacts.length !== 1 || artifact?.name !== name || artifact.expired !== false ||
+      !Number.isSafeInteger(artifact.id) || artifact.id < 1 ||
+      (source && (source.id !== latest.id || source.head_sha !== sha)) ||
+      artifact.digest !== "sha256:" + approved) {
+    throw new Error("The tag must approve the current canonical CI artifact. If it is missing or expired, re-run all CI jobs.");
+  }
 }
 
 function verify() {
@@ -69,7 +83,7 @@ function verify() {
   command("git", ["merge-base", "--is-ancestor", sha, main], "The reviewed commit must be on main.");
   const { version } = JSON.parse(command("git", ["show", sha + ":package.json"], "Missing package.json in the reviewed commit."));
   if (typeof version !== "string" || "v" + version !== TAG) throw new Error("The manifest version must exactly match the tag.");
-  checkCI(sha);
+  checkCI(sha, digest);
   const epoch = command("git", ["show", "-s", "--format=%ct", sha], "Missing reviewed commit timestamp.").trim();
   appendFileSync(process.env.GITHUB_OUTPUT, "sha=" + sha + "\nepoch=" + epoch + "\napproved_digest=" + digest + "\n");
 }

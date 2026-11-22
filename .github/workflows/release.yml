@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.21.0"
           package-manager-cache: false
       - name: Verify the tag, reviewed commit and main CI
         id: review
@@ -75,25 +75,26 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.21.0"
           package-manager-cache: false
       - name: Install the reviewed commit's dependencies
         env:
           REVIEWED_SHA: ${{ needs.verify.outputs.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
-          npm ci
+          npm ci --ignore-scripts
       - run: npm test
       - name: Build and verify the reviewed archive
         shell: bash
         env:
-          TZ: UTC
-          SOURCE_DATE_EPOCH: ${{ needs.verify.outputs.epoch }}
+          REVIEWED_SHA: ${{ needs.verify.outputs.sha }}
           VSIX_SHA256: ${{ needs.verify.outputs.approved_digest }}
         run: |
           file="$RUNNER_TEMP/panda-$GITHUB_RUN_ATTEMPT.vsix"
-          npm run package -- --out "$file"
-          [[ -f "$file" && ! -L "$file" ]] || exit 1
+          second="$RUNNER_TEMP/second-panda.vsix"
+          bash .github/scripts/pack-release.sh "$REVIEWED_SHA" "$file"
+          bash .github/scripts/pack-release.sh "$REVIEWED_SHA" "$second"
+          cmp "$file" "$second"
           printf '%s  %s\n' "$VSIX_SHA256" "$file" | shasum -a 256 --check --strict
       - name: Save the approved VSIX as a single file
         id: package
@@ -131,7 +132,7 @@ jobs:
           fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.21.0"
           package-manager-cache: false
       - name: Download the publisher tool by ID
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

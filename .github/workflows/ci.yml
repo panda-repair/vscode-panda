@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: "24.21.0"
           cache: npm
       - run: npm ci
       - run: npm test
@@ -32,3 +32,43 @@ jobs:
             exec sudo -u "$1" env HOME="$2" PATH="$3" VSCODE_TEST_EXECUTABLE="$4" VSCODE_TEST_VERSION="$5" xvfb-run -a npm run test:integration
           ' _ "$(id -un)" "$HOME" "$PATH" "$VSCODE_TEST_EXECUTABLE" "$VSCODE_TEST_VERSION"
       - run: TZ=UTC SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" npm run package
+
+  canonical-package:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'panda-repair/vscode-panda'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - name: Build the canonical VSIX
+        run: bash .github/scripts/pack-release.sh "$GITHUB_SHA" "$RUNNER_TEMP/canonical-panda-$GITHUB_RUN_ATTEMPT.vsix"
+      - name: Upload the raw VSIX
+        id: package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/canonical-panda-${{ github.run_attempt }}.vsix
+          archive: false
+          if-no-files-found: error
+      - name: Record the commit and verified artifact digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.package.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.package.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.package.outputs.artifact-url }}
+        run: |
+          name="canonical-panda-$GITHUB_RUN_ATTEMPT.vsix"
+          printf '%s  %s\n' "$DIGEST" "$RUNNER_TEMP/$name" | shasum -a 256 --check --strict
+          {
+            printf 'Commit %s\n\nSHA-256 %s\n\n' "$GITHUB_SHA" "$DIGEST"
+            printf '[Download %s](%s) · run %s · attempt %s · artifact ID %s\n' \
+              "$name" "$ARTIFACT_URL" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$ARTIFACT_ID"
+          } >> "$GITHUB_STEP_SUMMARY"

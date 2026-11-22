@@ -14,26 +14,34 @@ GitHub Actions supplies the short-lived publishing identity to `vsce publish --o
 
 ## Review and publish
 
-1. For a new version, run `npm version X.Y.Z --no-git-tag-version` to update `package.json` and the lockfile in your checkout. Running `npm run package -- patch --no-git-tag-version` changes the version only in the staged VSIX. Merge the reviewed changes to `main`. Wait for the **Check extension** workflow for that exact push to succeed.
-2. From a clean checkout of the intended commit, build and inspect the archive. The packaging command builds in a temporary directory with normalized file modes. Record both the first command's full commit SHA and the last command's VSIX SHA-256 in the release approval. The commands below build version 0.1.0.
+1. For a new version, run `npm version X.Y.Z --no-git-tag-version` to update `package.json` and the lockfile in your checkout. Running `npm run package -- patch --no-git-tag-version` changes the version only in the staged VSIX. Merge the reviewed changes to `main`. Wait for the latest **Check extension** **push** run for that exact commit to succeed. Open its **canonical-package** job summary. It links the raw `canonical-panda-<attempt>.vsix` and gives its artifact ID, commit SHA and SHA-256. Copy those three values from the same attempt. If the artifact expired or a partial rerun lacks one, use **Re-run all jobs**. A commit predating the canonical job must be replaced by a reviewed commit that includes it.
+2. As a designated releaser, start in a clean checkout of the reported commit. In Bash, substitute the three values below. The commands verify the downloaded bytes against the summary, then compare every filename and its SHA-256 with a local package including the generated VSIX manifest and content-types XML. Different compressors can produce different archive bytes for identical contents. The tag approves the **CI archive’s digest**. Any failed check stops the commands before tagging or dispatch.
 
-   ```sh
-   git rev-parse HEAD
-   npm ci
-   TZ=UTC SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" npm run package
-   shasum -a 256 panda-0.1.0.vsix
+   ```bash
+   (
+     set -euo pipefail
+     sha='<full commit SHA from the canonical job>'
+     digest='<SHA-256 from the same summary>'
+     artifact_id='<artifact ID from the same summary>'
+     [[ "$sha" =~ ^[0-9a-f]{40}$ && "$digest" =~ ^[0-9a-fA-F]{64}$ && "$artifact_id" =~ ^[1-9][0-9]*$ ]]
+     head=$(git rev-parse --verify HEAD)
+     changes=$(git status --porcelain)
+     [[ "$head" == "$sha" && -z "$changes" ]]
+     out=$(mktemp -d "${TMPDIR:-/tmp}/panda-approval.XXXXXXXX")
+     gh api "repos/panda-repair/vscode-panda/actions/artifacts/$artifact_id/zip" > "$out/ci.vsix"
+     printf '%s  %s\n' "$digest" "$out/ci.vsix" | shasum -a 256 --check --strict
+     npm ci --ignore-scripts
+     bash .github/scripts/pack-release.sh "$sha" "$out/local.vsix"
+     python3 .github/scripts/compare-package.py "$out/ci.vsix" "$out/local.vsix"
+
+     tag="v$(node -p 'require("./package.json").version')"
+     git tag -a "$tag" "$sha" -m "Release $tag" -m "vsix-sha256: $digest"
+     git push origin "refs/tags/$tag"
+     gh workflow run release.yml --repo panda-repair/vscode-panda --ref main \
+       -f tag="$tag" -f sha="$sha" -f vsix_sha256="$digest"
+   )
    ```
 
-3. A designated releaser copies the approved values, tags that SHA and dispatches **Release to Visual Studio Marketplace** on `main`. Substitute the recorded hashes below.
+Protected main’s workflow checks the tag, commit, manifest version and latest main-push CI artifact. Read-only jobs prepare the locked publisher and build the VSIX twice. Dependency installation skips lifecycle scripts. Each package build still runs the extension’s prepublish hook to typecheck and bundle it. Both archives must match byte for byte and match the tag digest. The publishing job downloads the verified VSIX and trusted tool by ID and checks the VSIX against the dispatch digest. To retry the release, choose **Re-run all jobs**. Confirm the version in Marketplace. To correct a published release, prepare a new version.
 
-   ```sh
-   tag=v0.1.0
-   sha='<reviewed 40-character commit SHA>'
-   vsix_sha256='<approved 64-character VSIX SHA-256>'
-   git tag -a "$tag" "$sha" -m "Release $tag" -m "vsix-sha256: $vsix_sha256"
-   git push origin "refs/tags/$tag"
-   gh workflow run release.yml --repo panda-repair/vscode-panda --ref main \
-     -f tag="$tag" -f sha="$sha" -f vsix_sha256="$vsix_sha256"
-   ```
-
-4. Check the release run in **Actions**. Protected main's workflow verifies the annotated tag's approval, commit, manifest version and latest CI result for that main push. Read-only jobs prepare the locked publisher and rebuild the VSIX against the digest from the tag. The publishing job downloads both artifacts by ID and rechecks the VSIX against the dispatch digest. If publication needs a retry, select **Re-run all jobs** to refresh verification and build both artifacts. Confirm the version in Marketplace. To correct a published release, prepare a new version.
+Use Node **24.21.0** for the comparison build. When changing the toolchain, update both packaging jobs in `.github/workflows/ci.yml` and every `setup-node` step in `.github/workflows/release.yml` together. Approve the digest from a successful main push that built with the new pin.

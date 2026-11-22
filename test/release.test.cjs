@@ -1,7 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync, spawnSync } = require("node:child_process");
-const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
+const { createHash } = require("node:crypto");
+const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 
@@ -35,6 +36,17 @@ test("the release guard binds a stable tag, reviewed Git object and latest canon
   writeFileSync(stub, `const cp = require("node:child_process"), original = cp.execFileSync;
 cp.execFileSync = (file, args, options) => {
   if (file !== "gh") return original(file, args, options);
+  if (args.length === 2) {
+    const runs = JSON.parse(process.env.RUN_PAGES).flatMap(page => page.workflow_runs);
+    const latest = runs.reduce((a, b) => a.run_number > b.run_number ? a : b);
+    const name = "canonical-panda-" + latest.run_attempt + ".vsix";
+    const url = "repos/panda-repair/vscode-panda/actions/runs/" + latest.id + "/artifacts?name=" + name + "&per_page=100";
+    require("node:assert/strict").deepEqual(args, ["api", url]);
+    if (process.env.FAIL_ARTIFACT) throw new Error("Fixture artifact API failure");
+    return process.env.ARTIFACT_LIST ?? JSON.stringify({ total_count: 1, artifacts: [
+      { id: 123, name, expired: false, digest: "sha256:" + "a".repeat(64), workflow_run: { id: latest.id, head_sha: latest.head_sha } }
+    ] });
+  }
   const path = "repos/panda-repair/vscode-panda/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=" +
     process.env.REVIEWED_SHA.toLowerCase() + "&per_page=100";
   require("node:assert/strict").deepEqual(args, ["api", "--paginate", "--slurp", path]);
@@ -42,7 +54,7 @@ cp.execFileSync = (file, args, options) => {
   return process.env.RUN_PAGES;
 };`);
   const canonical = { full_name: env.GITHUB_REPOSITORY };
-  const green = { id: 1, run_number: 10, head_sha: sha, event: "push", head_branch: "main", path: ".github/workflows/ci.yml",
+  const green = { id: 1, run_attempt: 2, run_number: 10, head_sha: sha, event: "push", head_branch: "main", path: ".github/workflows/ci.yml",
     repository: canonical, head_repository: canonical, status: "completed", conclusion: "success" };
   const fixture = (runs, total = runs.length) => [{ total_count: total, workflow_runs: runs }];
   const cases = [
@@ -83,6 +95,16 @@ cp.execFileSync = (file, args, options) => {
     assert.equal(readFileSync(env.GITHUB_OUTPUT, "utf8"), allowed ? expected : "", name);
   }
   cases.forEach(check);
+  const artifact = { id: 123, name: "canonical-panda-2.vsix", expired: false, digest: "sha256:" + "a".repeat(64) };
+  for (const [label, artifacts] of [
+    ["legacy CI with no package", []], ["ambiguous artifacts", [artifact, artifact]],
+    ["expired package", [{ ...artifact, expired: true }]],
+    ["artifact from another run", [{ ...artifact, workflow_run: { id: 99, head_sha: sha } }]],
+    ["package from an older attempt", [{ ...artifact, name: "canonical-panda-1.vsix" }]],
+    ["tag approved different archive bytes", [{ ...artifact, digest: "sha256:" + "b".repeat(64) }]],
+  ]) check([label, { ARTIFACT_LIST: JSON.stringify({ total_count: artifacts.length, artifacts }) }, fixture([green])]);
+  check(["artifact API unavailable", { FAIL_ARTIFACT: "yes" }, fixture([green])]);
+  check(["missing attempt", {}, fixture([{ ...green, run_attempt: undefined }])]);
   tagRelease("approved-inner", sha);
   git("tag", "-d", "v0.1.0");
   git("-c", "advice.nestedTag=false", "tag", "-a", "-m", approval, "-m", "object " + sha + "\ntype commit",
@@ -102,4 +124,68 @@ cp.execFileSync = (file, args, options) => {
   }
   git("update-ref", "-d", "refs/remotes/origin/main");
   check(["missing exact remote main", {}]);
+});
+
+test("the canonical CI artifact and the release's two packs obey the same approval", t => {
+  const root = resolve(__dirname, "..");
+  const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8").split("\n  canonical-package:\n")[1];
+  const release = readFileSync(join(root, ".github/workflows/release.yml"), "utf8");
+  assert.match(ci, /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
+  assert.match(ci, /github\.repository == 'panda-repair\/vscode-panda'/);
+  assert.match(ci, /permissions:\s*contents: read\n/);
+  assert.match(ci, /archive: false/);
+  assert.match(ci, /run: npm ci --ignore-scripts\n/);
+  assert.match(release, /test "\$\(git rev-parse HEAD\)" = "\$REVIEWED_SHA"\n\s+npm ci --ignore-scripts\n/);
+  assert.match(ci, /steps\.package\.outputs\.artifact-digest/);
+  assert.match(ci, /GITHUB_STEP_SUMMARY/);
+  const pin = ci.match(/node-version: "(\d+\.\d+\.\d+)"/)[1];
+  assert.deepEqual([...release.matchAll(/node-version: (.+)/g)].map(match => match[1]), Array(3).fill('"' + pin + '"'));
+
+  const canonicalPack = ci.match(/^        run: (bash \.github\/scripts\/pack-release\.sh .+)$/m)[1];
+  const step = release.split("      - name: Build and verify the reviewed archive\n")[1];
+  const releasePack = step.split("        run: |\n")[1].split("\n      - name:")[0].replace(/^ {10}/gm, "");
+  const cwd = mkdtempSync(join(tmpdir(), "canonical-package-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const scripts = join(cwd, ".github", "scripts");
+  mkdirSync(scripts, { recursive: true });
+  writeFileSync(join(scripts, "pack-release.sh"),
+    'set -eu\n[[ "$1" == "$GITHUB_SHA" ]]\nprintf reviewed > "$2"\nif [[ "${DIVERGE:-}" && "$2" == */second-* ]]; then printf different >> "$2"; fi\n');
+  const sha = "1".repeat(40);
+  const env = { PATH: process.env.PATH, RUNNER_TEMP: cwd, GITHUB_RUN_ATTEMPT: "2", GITHUB_SHA: sha, REVIEWED_SHA: sha };
+  const run = (shell, extra = {}) => spawnSync("bash", ["-eo", "pipefail", "-c", shell], { cwd, env: { ...env, ...extra }, encoding: "utf8" });
+  assert.equal(run(canonicalPack).status, 0);
+  const artifact = readFileSync(join(cwd, "canonical-panda-2.vsix"));
+  const digest = createHash("sha256").update(artifact).digest("hex");
+  assert.equal(run(releasePack, { VSIX_SHA256: digest }).status, 0);
+  assert.equal(run(releasePack, { VSIX_SHA256: "b".repeat(64) }).status, 1);
+  assert.equal(run(releasePack, { VSIX_SHA256: digest, DIVERGE: "1" }).status, 1);
+});
+
+test("package content approval ignores compression and checks the package and VSIX metadata", t => {
+  const helper = resolve(__dirname, "../.github/scripts/compare-package.py");
+  const cwd = mkdtempSync(join(tmpdir(), "package-comparison-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  execFileSync("python3", ["-I", "-B", "-W", "ignore::UserWarning", "-c", `
+import stat, zipfile
+for case in ("canonical", "local", "changed", "missing", "duplicate", "link"):
+    compression = zipfile.ZIP_STORED if case == "local" else zipfile.ZIP_DEFLATED
+    with zipfile.ZipFile(case + ".vsix", "w", compression=compression) as package:
+        package.writestr("extension/package.json", b"approved")
+        package.writestr("extension.vsixmanifest", b"changed platform" if case == "changed" else b"approved platform")
+        if case != "missing":
+            package.writestr("[Content_Types].xml", b"types")
+        if case == "duplicate":
+            package.writestr("extension/package.json", b"again")
+        if case == "link":
+            member = zipfile.ZipInfo("extension/link")
+            member.external_attr = (stat.S_IFLNK | 0o777) << 16
+            package.writestr(member, "package.json")
+`], { cwd });
+  const compare = (a, b) => spawnSync("python3", ["-I", "-B", helper, a + ".vsix", b + ".vsix"], { cwd, encoding: "utf8" });
+  assert.notDeepEqual(readFileSync(join(cwd, "canonical.vsix")), readFileSync(join(cwd, "local.vsix")));
+  const match = compare("canonical", "local");
+  assert.equal(match.status, 0, match.stderr);
+  assert.ok(match.stdout.includes("extension.vsixmanifest"));
+  for (const change of ["changed", "missing"]) assert.equal(compare("canonical", change).status, 1);
+  for (const unsafe of ["duplicate", "link"]) assert.equal(compare(unsafe, unsafe).status, 1);
 });
