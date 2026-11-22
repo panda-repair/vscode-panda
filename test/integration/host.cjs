@@ -20,6 +20,9 @@ exports.run = async () => {
   assert.ok(major > 1 || major === 1 && minor >= 127);
   require("node:fs").writeFileSync(require("node:path").join(process.env.PANDA_FIXTURE_SYNC, "host-version"), vscode.version);
   const { secrets, provider, observer } = await vscode.extensions.getExtension("panda-repair.panda").activate();
+  if (process.env.PANDA_FIXTURE_CASE === "proxy-407") {
+    return require("./proxy-host.cjs").verifyPac407(secrets, select);
+  }
   const endpoint = process.env.PANDA_FIXTURE_ENDPOINT;
   assert.match(endpoint, /^http:\/\/127\.0\.0\.1:\d+\/v1$/);
   const slot = "panda.apiKey." + createHash("sha256").update(endpoint).digest("hex");

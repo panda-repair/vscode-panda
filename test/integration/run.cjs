@@ -16,9 +16,8 @@ async function main() {
   // Short profile paths also fit macOS's 103-byte Unix-domain socket limit.
   const root = mkdtempSync(join(tmpdir(), "p"));
   const extension = join(root, "extension");
-  const profile = join(root, "u");
   const workspace = join(root, "workspace");
-  for (const path of [join(extension, "dist"), join(profile, "User"), workspace, join(root, "extensions")]) {
+  for (const path of [join(extension, "dist"), workspace, join(root, "extensions")]) {
     mkdirSync(path, { recursive: true });
   }
   const sync = join(root, "sync"); mkdirSync(sync);
@@ -77,24 +76,42 @@ async function main() {
     writeFileSync(join(workspace, "marker.txt"), "marker from the local fixture");
     mkdirSync(join(workspace, ".vscode"));
     writeFileSync(join(workspace, ".vscode", "settings.json"), JSON.stringify({ "panda.baseUrl": "http://127.0.0.1:1/v1" }));
-    writeFileSync(join(profile, "User", "settings.json"), JSON.stringify({
-      "panda.baseUrl": endpoint, "telemetry.telemetryLevel": "off", "update.mode": "none",
-      "extensions.autoCheckUpdates": false, "extensions.autoUpdate": false, "workbench.enableExperiments": false,
-      "chat.disableAIFeatures": false, "security.workspace.trust.enabled": false,
-    }));
-    await runTests({ vscodeExecutablePath: executable, extensionDevelopmentPath: extension,
-      extensionTestsPath: join(extension, "host.cjs"), extensionTestsEnv: { PANDA_FIXTURE_ENDPOINT: endpoint,
-        PANDA_FIXTURE_SYNC: sync, PANDA_EXPECTED_VERSION: process.env.VSCODE_TEST_EXECUTABLE ? process.env.VSCODE_TEST_VERSION || "" : version,
-        PANDA_PROXY_FIXTURE: JSON.stringify({ endpoint: network.endpoint, bypass: network.bypass, httpProxy: network.httpProxy,
-          httpsProxy: network.httpsProxy, requiredAuth: network.requiredAuth, office: network.office, untrusted: network.untrusted }),
-        NODE_EXTRA_CA_CERTS: network.ca, NODE_TLS_REJECT_UNAUTHORIZED: "1", HTTP_PROXY: "", HTTPS_PROXY: "", NO_PROXY: "",
-        http_proxy: "", https_proxy: "", no_proxy: "" },
-      launchArgs: [workspace, "--user-data-dir=" + profile, "--extensions-dir=" + join(root, "extensions"),
-        "--disable-extensions", "--disable-gpu", "--no-sandbox", "--use-inmemory-secretstorage", "--use-mock-keychain",
-        "--disable-telemetry", "--disable-updates", "--disable-workspace-trust", "--skip-welcome", "--skip-release-notes",
-        "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-crash-reporter",
-        "--proxy-pac-url=" + network.pacUrl],
-    });
+    async function runHost(suite, settings) {
+      const profile = join(root, suite === "proxy-407" ? "p" : "u");
+      mkdirSync(join(profile, "User"), { recursive: true });
+      writeFileSync(join(profile, "User", "settings.json"), JSON.stringify({
+        "panda.baseUrl": endpoint, "telemetry.telemetryLevel": "off", "update.mode": "none",
+        "extensions.autoCheckUpdates": false, "extensions.autoUpdate": false, "workbench.enableExperiments": false,
+        "chat.disableAIFeatures": false, "security.workspace.trust.enabled": false, ...settings,
+      }));
+      await runTests({ vscodeExecutablePath: executable, extensionDevelopmentPath: extension,
+        extensionTestsPath: join(extension, "host.cjs"), extensionTestsEnv: { PANDA_FIXTURE_ENDPOINT: endpoint,
+          PANDA_FIXTURE_CASE: suite, PANDA_FIXTURE_SYNC: sync, PANDA_EXPECTED_VERSION: process.env.VSCODE_TEST_EXECUTABLE ? process.env.VSCODE_TEST_VERSION || "" : version,
+          PANDA_PROXY_FIXTURE: JSON.stringify({ endpoint: network.endpoint, bypass: network.bypass, httpProxy: network.httpProxy,
+            httpsProxy: network.httpsProxy, requiredAuth: network.requiredAuth, office: network.office, untrusted: network.untrusted }),
+          NODE_EXTRA_CA_CERTS: network.ca, NODE_TLS_REJECT_UNAUTHORIZED: "1", HTTP_PROXY: "", HTTPS_PROXY: "", NO_PROXY: "",
+          http_proxy: "", https_proxy: "", no_proxy: "" },
+        launchArgs: [workspace, "--user-data-dir=" + profile, "--extensions-dir=" + join(root, "extensions"),
+          "--disable-extensions", "--disable-gpu", "--no-sandbox", "--use-inmemory-secretstorage", "--use-mock-keychain",
+          "--disable-telemetry", "--disable-updates", "--disable-workspace-trust", "--skip-welcome", "--skip-release-notes",
+          "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-crash-reporter",
+          "--proxy-pac-url=" + network.pacUrl],
+      });
+    }
+    // This user-data directory has never had an explicit proxy or a previous tunnel.
+    await runHost("proxy-407", { "panda.baseUrl": network.endpoint, "http.proxySupport": "override",
+      "http.proxyStrictSSL": false, "http.proxyAuthorization": network.requiredAuth });
+    const refused = network.tunnels.filter(req => req.requireAuth && !req.accepted);
+    assert.ok(network.pacReads.length > 0);
+    assert.ok(network.tunnels.some(req => req.kind === "https" && req.requireAuth && req.accepted));
+    assert.ok(refused.length > 0 && refused.every(req => req.kind === "https" &&
+      req.authority === new URL(network.endpoint).host && req.proxyAuthorization === "Bearer wrong-fixture-407" && !req.leaked));
+    assert.ok(network.requests.some(req => req.method === "GET" && req.bearer && req.via === "https"));
+    assert.equal(network.requests.filter(req => req.method === "POST").length, 0);
+    console.log("Fresh PAC profile passed on stock VS Code " + readFileSync(join(sync, "host-version"), "utf8") +
+      " (" + refused.length + " refused CONNECT, zero origin chat POSTs).");
+    if (process.argv.includes("--proxy-407")) return;
+    await runHost("full", {});
     assert.ok(gets >= 6);
     assert.deepEqual(issues, []);
     const proof = probes.verify();
@@ -108,7 +125,6 @@ async function main() {
     assert.deepEqual(networkPosts.map(req => req.via), ["http", "https", "http", "https", "http", "direct", "direct"]);
     assert.ok(network.pacReads.length > 0 && network.pacReads.every(req => !req.originAuth && !req.proxyAuth));
     assert.ok(network.rejected.has("panda-unmatched.invalid:443"));
-    assert.ok(network.tunnels.some(req => req.requireAuth && !req.accepted));
     for (const kind of ["http", "https"]) {
       assert.ok(network.tunnels.some(req => req.kind === kind && req.requireAuth && req.accepted &&
         req.proxyAuthorization === network.requiredAuth));

@@ -2,6 +2,30 @@ const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const vscode = require("vscode");
 
+async function ask(model, text) {
+  const cancel = new vscode.CancellationTokenSource();
+  const timer = setTimeout(() => cancel.cancel(), 6000);
+  try {
+    const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(text)], {}, cancel.token);
+    let result = ""; for await (const text of response.text) result += text; return result;
+  } finally { clearTimeout(timer); cancel.dispose(); }
+}
+
+exports.verifyPac407 = async function verifyPac407(secrets, select) {
+  const { endpoint, requiredAuth } = JSON.parse(process.env.PANDA_PROXY_FIXTURE);
+  const http = vscode.workspace.getConfiguration("http");
+  assert.equal(http.inspect("proxy").globalValue, undefined);
+  assert.equal(http.get("proxySupport"), "override");
+  assert.equal(http.get("proxyAuthorization"), requiredAuth);
+  const slot = "panda.apiKey." + createHash("sha256").update(endpoint).digest("hex");
+  await secrets.store(slot, "pnd_it_proxy_fixture");
+  const [model] = await select(["auto:cost"]);
+  await http.update("proxyAuthorization", "Bearer wrong-fixture-407", vscode.ConfigurationTarget.Global);
+  await assert.rejects(ask(model, "PAC rejects the proxy credential"), {
+    message: "The network proxy requires authentication. Check the proxy address and credentials.",
+  });
+};
+
 exports.verifyProxy = async function verifyProxy(secrets, select, provider) {
   const fixture = JSON.parse(process.env.PANDA_PROXY_FIXTURE);
   const global = vscode.ConfigurationTarget.Global;
@@ -16,14 +40,6 @@ exports.verifyProxy = async function verifyProxy(secrets, select, provider) {
     await setEndpoint(endpoint);
     return (await select(["auto:cost"]))[0];
   };
-  const ask = async (model, text) => {
-    const cancel = new vscode.CancellationTokenSource();
-    const timer = setTimeout(() => cancel.cancel(), 6000);
-    try {
-      const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(text)], {}, cancel.token);
-      let result = ""; for await (const text of response.text) result += text; return result;
-    } finally { clearTimeout(timer); cancel.dispose(); }
-  };
   await set("proxySupport", "override");
   await set("proxy", fixture.httpProxy);
   const model = await selectAt(fixture.endpoint);
@@ -37,10 +53,6 @@ exports.verifyProxy = async function verifyProxy(secrets, select, provider) {
   assert.equal(await ask(model, "environment proxy"), "tunnel answer");
   delete process.env.HTTPS_PROXY;
   await set("proxyStrictSSL", false);
-  await set("proxyAuthorization", "Bearer wrong-test-proxy");
-  await assert.rejects(ask(model, "PAC rejects the proxy credential"), {
-    message: "The network proxy requires authentication. Check the proxy address and credentials.",
-  });
   await set("proxyAuthorization", fixture.requiredAuth);
   assert.equal(await ask(model, "HTTPS PAC proxy"), "tunnel answer");
   await set("proxyStrictSSL", true);
