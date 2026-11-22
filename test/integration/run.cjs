@@ -87,7 +87,7 @@ async function main() {
         PANDA_FIXTURE_SYNC: sync, PANDA_EXPECTED_VERSION: process.env.VSCODE_TEST_EXECUTABLE ? process.env.VSCODE_TEST_VERSION || "" : version,
         PANDA_PROXY_FIXTURE: JSON.stringify({ endpoint: network.endpoint, bypass: network.bypass, httpProxy: network.httpProxy,
           httpsProxy: network.httpsProxy, requiredAuth: network.requiredAuth, office: network.office, untrusted: network.untrusted }),
-        NODE_EXTRA_CA_CERTS: network.ca, NODE_TLS_REJECT_UNAUTHORIZED: "0", HTTP_PROXY: "", HTTPS_PROXY: "", NO_PROXY: "",
+        NODE_EXTRA_CA_CERTS: network.ca, NODE_TLS_REJECT_UNAUTHORIZED: "1", HTTP_PROXY: "", HTTPS_PROXY: "", NO_PROXY: "",
         http_proxy: "", https_proxy: "", no_proxy: "" },
       launchArgs: [workspace, "--user-data-dir=" + profile, "--extensions-dir=" + join(root, "extensions"),
         "--disable-extensions", "--disable-gpu", "--no-sandbox", "--use-inmemory-secretstorage", "--use-mock-keychain",
@@ -107,6 +107,7 @@ async function main() {
       ["fixed proxy", "HTTPS proxy only", "environment proxy", "HTTPS PAC proxy", "HTTP PAC proxy", "PAC DIRECT", "bypass proxy"]);
     assert.deepEqual(networkPosts.map(req => req.via), ["http", "https", "http", "https", "http", "direct", "direct"]);
     assert.ok(network.pacReads.length > 0 && network.pacReads.every(req => !req.originAuth && !req.proxyAuth));
+    assert.ok(network.rejected.has("panda-unmatched.invalid:443"));
     assert.ok(network.tunnels.some(req => req.requireAuth && !req.accepted));
     for (const kind of ["http", "https"]) {
       assert.ok(network.tunnels.some(req => req.kind === kind && req.requireAuth && req.accepted &&

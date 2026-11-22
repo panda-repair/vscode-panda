@@ -48,7 +48,7 @@ exports.verifyProxy = async function verifyProxy(secrets, select, provider) {
   const office = await selectAt(fixture.office);
   assert.equal(await ask(office, "HTTP PAC proxy"), "tunnel answer");
   await set("proxyStrictSSL", false);
-  assert.equal(process.env.NODE_TLS_REJECT_UNAUTHORIZED, "0");
+  assert.equal(process.env.NODE_TLS_REJECT_UNAUTHORIZED, "1");
   await setEndpoint(fixture.untrusted);
   const cancel = new vscode.CancellationTokenSource();
   try {
@@ -56,6 +56,14 @@ exports.verifyProxy = async function verifyProxy(secrets, select, provider) {
   } finally { cancel.dispose(); }
   const direct = await selectAt(fixture.bypass);
   assert.equal(await ask(direct, "PAC DIRECT"), "tunnel answer");
+  const offHostStatus = await new Promise((resolve, reject) => {
+    // A mistaken DIRECT route must fail locally before DNS or an origin connection.
+    const req = require("https").get("https://panda-unmatched.invalid/", {
+      signal: AbortSignal.timeout(5000), lookup: (_host, _options, callback) => callback(new Error("Unexpected direct lookup")),
+    }, response => { response.resume(); resolve(response.statusCode); });
+    req.on("error", reject);
+  });
+  assert.equal(offHostStatus, 403);
   process.env.HTTPS_PROXY = fixture.httpProxy; process.env.NO_PROXY = "localhost.";
   assert.equal(await ask(direct, "bypass proxy"), "tunnel answer");
 };

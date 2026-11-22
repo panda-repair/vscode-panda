@@ -71,10 +71,19 @@ exports.proxyFixture = async function proxyFixture(dir) {
   }
   const httpProxy = await proxy("http"), httpsProxy = await proxy("https");
   const requiredHttp = await proxy("http", true), requiredHttps = await proxy("https", true);
+  const rejected = new Set();
+  const deny = http.createServer((_req, res) => res.writeHead(403).end());
+  deny.on("connect", (req, socket) => {
+    rejected.add(req.url);
+    socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+  });
+  const denyPort = await bind(deny);
   const pacReads = [];
   const pac = "function FindProxyForURL(url, host) { " +
     "if (host === 'panda-origin.invalid') return 'HTTPS " + new URL(requiredHttps).host + "'; " +
-    "if (host === 'panda-office.invalid') return 'PROXY " + new URL(requiredHttp).host + "'; return 'DIRECT'; }";
+    "if (host === 'panda-office.invalid') return 'PROXY " + new URL(requiredHttp).host + "'; " +
+    "if (host === '127.0.0.1' || host === 'localhost' || host === 'localhost.' || host === '::1' || host === '[::1]') return 'DIRECT'; " +
+    "return 'PROXY 127.0.0.1:" + denyPort + "'; }";
   const pacPort = await bind(http.createServer((req, res) => {
     if (req.url !== "/local.pac") return res.writeHead(404).end();
     pacReads.push({ originAuth: !!req.headers.authorization, proxyAuth: !!req.headers["proxy-authorization"] });
@@ -84,7 +93,7 @@ exports.proxyFixture = async function proxyFixture(dir) {
     office: "https://panda-office.invalid:" + port + "/v1", untrustedDirect: "https://localhost.:" + untrustedPort + "/v1",
     requiredHttp, requiredHttps, requiredAuth, pacReads, pacUrl: "http://127.0.0.1:" + pacPort + "/local.pac",
     untrusted: "https://panda-origin.invalid:" + untrustedPort + "/v1", ca: join(dir, "origin-ca.pem"), httpProxy, httpsProxy,
-    tunnels, requests, async close() {
+    tunnels, requests, rejected, async close() {
       for (const socket of sockets) socket.destroy();
       await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
     } };
