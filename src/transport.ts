@@ -49,8 +49,8 @@ function timeoutError() { return Object.assign(new Error("Panda connection timed
 function systemRequest(url: URL, headers: Record<string, string>, body: string | undefined, signal: AbortSignal,
   settings: NetworkSettings): Promise<Response> {
   return new Promise((resolve, reject) => {
-    const ca = systemRoots(settings.systemCertificates);
-    const req = hostRequest(url, { method: body === undefined ? "GET" : "POST", headers, signal, ca, rejectUnauthorized: true }, res => {
+    // Leave the origin CA unset so VS Code can supply desktop roots to a remote extension host.
+    const req = hostRequest(url, { method: body === undefined ? "GET" : "POST", headers, signal, rejectUnauthorized: true }, res => {
       clearTimeout(timer);
       res.setTimeout(IDLE_TIMEOUT_MS, () => res.destroy(timeoutError()));
       resolve({ statusCode: res.statusCode!, headers: res.headers, body: res });
@@ -62,7 +62,7 @@ function systemRequest(url: URL, headers: Record<string, string>, body: string |
     const agent = "agent" in req ? req.agent : undefined;
     if (agent !== globalAgent && record(agent) && typeof agent.resolver === "function" &&
         typeof agent.addCAs === "function" && record(agent.opts)) {
-      agent.opts.ca = ca;
+      agent.opts.ca = systemRoots(settings.systemCertificates);
       agent.opts.rejectUnauthorized = settings.proxyStrictSSL !== false;
       if (settings.proxyAuthorization) {
         agent.opts.headers = { "Proxy-Authorization": settings.proxyAuthorization };

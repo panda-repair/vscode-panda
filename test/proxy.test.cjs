@@ -9,6 +9,18 @@ const { proxyFixture } = require("./proxy-fixture.cjs");
 const { proxyRoute } = require("../out/transport");
 const run = promisify(execFile);
 
+test("native discovery and chat accept a CA supplied only by the extension host", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "panda-remote-ca-"));
+  const fixture = await proxyFixture(dir);
+  t.after(async () => { await fixture.close(); rmSync(dir, { recursive: true, force: true }); });
+  await run(process.execPath, [join(__dirname, "remote-ca.cjs"), fixture.bypass, fixture.ca], {
+    env: { ...process.env, NODE_EXTRA_CA_CERTS: "", NODE_TLS_REJECT_UNAUTHORIZED: "1",
+      HTTPS_PROXY: "", HTTP_PROXY: "", NO_PROXY: "", https_proxy: "", http_proxy: "", no_proxy: "" },
+  });
+  assert.deepEqual(fixture.requests.map(req => req.method), ["GET", "POST"]);
+  assert.ok(fixture.requests.every(req => req.trustedOrigin && req.bearer && req.via === "direct"));
+});
+
 test("CONNECT settings precede the environment, bypass is scoped, and system routing owns an unconfigured HTTPS target", () => {
   const url = new URL("https://sub.panda.example:8443/v1");
   const env = { HTTPS_PROXY: "http://localhost:5000", NO_PROXY: ".elsewhere,panda.example:8443" };
@@ -27,7 +39,8 @@ test("a real HTTP or HTTPS CONNECT tunnel keeps the bearer at the TLS origin, ho
   async function probe(settings, url = fixture.endpoint, env = {}, input) {
     const child = await run(process.execPath, [join(__dirname, "proxy-client.cjs")], { env: { ...process.env,
       https_proxy: "", http_proxy: "", HTTP_PROXY: "", HTTPS_PROXY: "", NO_PROXY: "", no_proxy: "",
-      NODE_EXTRA_CA_CERTS: fixture.ca, PANDA_PROXY_FIXTURE: JSON.stringify({ url, settings, input }), ...env } });
+      NODE_EXTRA_CA_CERTS: fixture.ca, NODE_TLS_REJECT_UNAUTHORIZED: "1",
+      PANDA_PROXY_FIXTURE: JSON.stringify({ url, settings, input }), ...env } });
     return JSON.parse(child.stdout);
   }
   const good = await probe({ proxy: fixture.httpProxy, proxyAuthorization: "Bearer corporate-fixture" });
