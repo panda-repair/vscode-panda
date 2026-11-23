@@ -19,7 +19,7 @@ exports.run = async () => {
   const [major, minor] = vscode.version.split(".").map(Number);
   assert.ok(major > 1 || major === 1 && minor >= 127);
   require("node:fs").writeFileSync(require("node:path").join(process.env.PANDA_FIXTURE_SYNC, "host-version"), vscode.version);
-  const { secrets, provider, observer } = await vscode.extensions.getExtension("panda-repair.panda").activate();
+  const { secrets, provider, observer } = await vscode.extensions.getExtension("panda-repair.panda-api").activate();
   if (process.env.PANDA_FIXTURE_CASE === "proxy-407") {
     return require("./proxy-host.cjs").verifyPac407(secrets, select);
   }

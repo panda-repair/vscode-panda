@@ -1,6 +1,6 @@
 {
-  "name": "panda",
-  "displayName": "Panda",
+  "name": "panda-api",
+  "displayName": "Panda API",
   "description": "Use Panda's Auto models and Panels in VS Code Chat.",
   "version": "0.1.0",
   "publisher": "panda-repair",
