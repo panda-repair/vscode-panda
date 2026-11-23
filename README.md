@@ -4,7 +4,7 @@ Use Panda in VS Code Chat with your own Panda inference token. **Choose Panda Au
 
 ## Install and connect
 
-1. In VS Code 1.127.0 or later, install **Panda API** (`panda-repair.panda-api`) from the Extensions view, or run `code --install-extension panda-repair.panda-api`. To install a downloaded VSIX instead, run **Extensions: Install from VSIX…** and select `panda-api-0.1.0.vsix`.
+1. In VS Code 1.127.0 or later, install **Panda API** (`panda-repair.panda-api`) from the Extensions view, or run `code --install-extension panda-repair.panda-api`. To install a downloaded VSIX instead, run **Extensions: Install from VSIX…** and select the downloaded `.vsix` file.
 2. Run **Panda: Manage API Key** from the Command Palette and paste your `pnd_it_…` inference token into the password field. The extension checks the token with Panda and saves it in VS Code’s SecretStorage.
 3. Open Chat’s model picker and select **Panda Auto · Cost**. Only Panda selectors returned by your token’s model list are available. For Business or Enterprise accounts, your administrator controls access through the **Bring Your Own Language Model Key in VS Code** policy.
 
@@ -52,6 +52,6 @@ Panda's privacy policy says it retains billing metadata and does not retain API 
 
 Use Node.js 24 and OpenSSL to run `npm ci`, `npm test` and `npm run test:integration`. The integration runner uses a fresh profile, synthetic keys and a loopback API. It downloads stock VS Code 1.127.0 by default. Set `VSCODE_TEST_VERSION=stable` to test the current stable release, `VSCODE_TEST_EXECUTABLE` to an existing executable for offline use, or `VSCODE_TEST_CACHE` to choose a download cache. On headless Linux use `xvfb-run -a npm run test:integration`.
 
-Build a reproducible VSIX from a clean commit with `TZ=UTC SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" npm run package`. `panda-repair` is the placeholder publisher for this local VSIX. Confirm the Marketplace publisher ID before publishing.
+Build a reproducible VSIX from a clean commit with `TZ=UTC SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" npm run package`.
 
 MIT License. Copyright (c) 2026 panda-repair.
