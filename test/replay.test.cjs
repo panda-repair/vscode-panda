@@ -76,6 +76,24 @@ test("the paid action binds exact request, endpoint and current token, and recov
   assert.equal(ledger.size, 2);
 });
 
+test("the offer and its answer tab name the model as the chat model picker does", async () => {
+  const messages = [], titles = [], requested = [];
+  const actions = new GenerateActions({ async chat(model) { requested.push(model); } }, { ViewColumn: { Beside: 2 }, window: {
+    showWarningMessage: async message => { messages.push(message); return GENERATE_ANOTHER; },
+    showInformationMessage: assert.fail,
+    createWebviewPanel(_type, title) {
+      titles.push(title);
+      return { webview: {}, onDidDispose() {}, dispose() {} };
+    },
+  } });
+  actions.offer("auto:cost", new PandaReplay("run-1", "Receipt."), "{}", { originalKey: "key-1", afterRun: "run-1" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(messages.length, 1); assert.ok(messages[0].startsWith("Panda Mini · Receipt."), messages[0]);
+  assert.deepEqual(titles, ["Panda answer · Panda Mini"]);
+  assert.deepEqual(requested, ["auto:cost"]);
+  actions.dispose();
+});
+
 test("dismissed or expired offers cannot start a paid request, and earlier answer tabs remain available", async () => {
   const offers = [], notes = [], opened = [];
   let posts = 0;

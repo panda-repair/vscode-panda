@@ -75,7 +75,7 @@ test("HTTP errors keep bounded credential-free context and never replay or follo
     if ([307, 308].includes(status)) res.setHeader("location", sink.endpoint);
     json(res, { error: { code: "context_length_exceeded", message: "fixture limit " + key + " " + "x".repeat(1000) } }, status);
   });
-  const checks = [[400, /context limit/], [401, /wrong or expired/], [403, /does not permit/], [402, /fixture limit/],
+  const checks = [[400, /exceeds the model's context limit/], [401, /wrong or expired/], [403, /does not permit/], [402, /fixture limit/],
     [429, /fixture limit/], [409, /replay/], [421, /HTTP 421/], [500, /may already have run/],
     [307, /redirect/], [308, /redirect/]];
   for (const [code, message] of checks) {

@@ -1,5 +1,6 @@
 import type * as vscode from "vscode";
 import type { Access } from "./access";
+import { models } from "./catalog";
 import type { FreshOperation } from "./client";
 import { GENERATE_ANOTHER, PandaError, PandaOutputLimit, PandaReplay } from "./errors";
 
@@ -7,6 +8,9 @@ type Turn = { model: string; wire: string; operation: FreshOperation; expires: N
 const MAX_PENDING = 4;
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const OFFER_LIFETIME = 5 * 60_000;
+
+// The name the chat model picker shows, so an offer and its answer tab label the model the same way.
+function modelName(id: string) { return models.find(model => model.id === id)?.name ?? id; }
 
 function page(text: string) {
   const safe = text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -41,7 +45,7 @@ export class GenerateActions implements vscode.Disposable {
     const id = Symbol();
     const expires = setTimeout(() => this.take(id), OFFER_LIFETIME).unref();
     this.pending.set(id, { model, wire, operation, expires });
-    void this.prompt(id, model + " · " + error.message).catch(() => {});
+    void this.prompt(id, modelName(model) + " · " + error.message).catch(() => {});
   }
 
   private async prompt(id: symbol, message: string) {
@@ -52,7 +56,7 @@ export class GenerateActions implements vscode.Disposable {
       void this.host.window.showInformationMessage("This Panda offer expired. Retry the original turn to see its current run status.");
       return;
     }
-    const panel = this.host.window.createWebviewPanel("panda.answer", "Panda answer · " + turn.model,
+    const panel = this.host.window.createWebviewPanel("panda.answer", "Panda answer · " + modelName(turn.model),
       this.host.ViewColumn.Beside, { enableScripts: false, localResourceRoots: [] });
     this.panels.add(panel);
     const controller = new AbortController();

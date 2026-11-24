@@ -63,7 +63,7 @@ export function responseError(status: number, payload: unknown, key: string, hea
     return new PandaError(detail ? title + " " + detail : title, "blocked");
   }
   if (status === 400 && error.code === "context_length_exceeded") {
-    return new PandaError("This conversation exceeds the Panda route's context limit. Shorten it or request fewer output tokens.");
+    return new PandaError("This conversation exceeds the model's context limit. Shorten it or request fewer output tokens.");
   }
   if (status >= 300 && status < 400) return new PandaError("The Panda endpoint returned a redirect. Check the API base URL.");
   if (status === 409) return replayError(payload, key, headerRunId);
