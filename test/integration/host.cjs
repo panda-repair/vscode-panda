@@ -33,7 +33,7 @@ exports.run = async () => {
   await secrets.store(slot, "pnd_it_integration_a");
   const rows = await select(["auto:cost", "panel:panda-quality"]);
   const model = rows.find(row => row.id === "auto:cost");
-  assert.equal(model.name, "Panda Auto · Cost");
+  assert.equal(model.name, "Panda Mini");
   assert.equal(model.maxInputTokens, 241616);
   assert.equal(await model.countTokens("hello"), 2);
   const cancellation = new vscode.CancellationTokenSource();

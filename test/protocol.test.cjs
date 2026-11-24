@@ -7,9 +7,9 @@ const { Text, Data, ToolCall, ToolResult, host } = require("./fixture.cjs");
 
 test("all five models have the stated input, output and stable capabilities; discovery intersects direct grants", () => {
   assert.deepEqual(models.map(m => [m.id, m.name, m.maxInputTokens]), [
-    ["auto", "Panda Auto", 207616], ["auto:cost", "Panda Auto · Cost", 241616],
-    ["auto:quality", "Panda Auto · Quality", 170616], ["panel:panda", "Panda Panel", 207616],
-    ["panel:panda-quality", "Panda Quality Panel", 207616],
+    ["auto", "Panda Auto", 207616], ["auto:cost", "Panda Mini", 241616],
+    ["auto:quality", "Panda Max", 170616], ["panel:panda", "Panda Mix", 207616],
+    ["panel:panda-quality", "Panda Mix Pro", 207616],
   ]);
   for (const model of models) {
     assert.equal(model.maxOutputTokens, 16384);

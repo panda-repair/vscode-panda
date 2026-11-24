@@ -63,7 +63,7 @@ exports.run = async (model, observer) => {
   assert.match(observer.offers[0].message, /running/);
   observer.offers.shift().dismiss();
   fs.writeFileSync(join(dir, "release-fresh"), "");
-  await until(() => observer.panels.some(p => p.webview.html.includes("answer from run-fixture-2")), "fresh answer in visible Panda panel");
+  await until(() => observer.panels.some(p => p.webview.html.includes("answer from run-fixture-2")), "fresh answer in visible Panda answer panel");
   await denied();
   for (const offer of observer.offers.splice(0)) offer.dismiss();
   for (const panel of observer.panels.splice(0)) panel.dispose();

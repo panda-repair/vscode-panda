@@ -1,8 +1,8 @@
 {
   "name": "panda-api",
   "displayName": "Panda API",
-  "description": "Use Panda's Auto models and Panels in VS Code Chat.",
-  "version": "0.1.0",
+  "description": "Use Panda's models in VS Code Chat: Panda Mini, Panda Auto, Panda Mix, Panda Mix Pro and Panda Max.",
+  "version": "0.1.1",
   "publisher": "panda-repair",
   "license": "MIT",
   "engines": { "vscode": "^1.127.0" },

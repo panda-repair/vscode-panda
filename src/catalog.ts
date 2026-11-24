@@ -4,10 +4,10 @@ export const OUTPUT_LIMIT = 16_384;
 
 const selectors = [
   ["auto", "Panda Auto", 224_000],
-  ["auto:cost", "Panda Auto · Cost", 258_000],
-  ["auto:quality", "Panda Auto · Quality", 187_000],
-  ["panel:panda", "Panda Panel", 224_000],
-  ["panel:panda-quality", "Panda Quality Panel", 224_000],
+  ["auto:cost", "Panda Mini", 258_000],
+  ["auto:quality", "Panda Max", 187_000],
+  ["panel:panda", "Panda Mix", 224_000],
+  ["panel:panda-quality", "Panda Mix Pro", 224_000],
 ] as const;
 
 export const models = selectors.map(([id, name, context]) => ({
