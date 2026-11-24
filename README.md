@@ -42,9 +42,9 @@ Use `http.proxyAuthorization` for a proxy that requires credentials and `http.sy
 
 Panda receives the selected model, conversation text, tool definitions, tool-call arguments and tool results. The extension sends the Panda bearer inside the TLS connection to the API and omits it from CONNECT. A corporate gateway that inspects TLS using a CA you trust can read the bearer and the conversation.
 
-In a mix, every model reads the conversation, with your tool descriptions, arguments and results. Without tools, Panda Auto and Panda Max read up to 2,000 characters from the start of your latest user message to pick how to answer. [Panda API guide](https://panda.repair/products/llm-api)
+In a mix, every model reads the conversation, with your tool descriptions, arguments and results. Without tools, Panda Auto and Panda Max read up to 2,000 characters from the start of your latest user message to pick how to answer.
 
-Panda's privacy policy says it retains billing metadata and does not retain API prompts or responses. It also says which providers process your requests and what they may keep. [Panda privacy policy](https://panda.repair/privacy)
+Panda's privacy policy says it retains billing metadata and does not retain API prompts or responses. It also says which providers process your requests and what they may keep. [What Panda keeps](https://panda.repair/products/llm-api#llm-api-data) · [Panda privacy policy](https://panda.repair/privacy)
 
 ## Development
 
